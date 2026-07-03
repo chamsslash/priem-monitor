@@ -1,0 +1,1294 @@
+[
+  {
+    "id": 1,
+    "university": "МИРЭА",
+    "direction_code": "38055",
+    "competition_group": "Программная инженерия",
+    "program": "Разработка программных продуктов и проектирование информационных систем (при поддердке Яндекс)",
+    "passing_score_2025": 288.0,
+    "dima_score": 259,
+    "budget_places": 17,
+    "study_plan_url": "",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638764821585206&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638764821585206"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 2,
+    "university": "МИРЭА",
+    "direction_code": "38055",
+    "competition_group": "Программная инженерия",
+    "program": "Системная и программная инженерия (при поддержке Samsung)",
+    "passing_score_2025": 285.0,
+    "dima_score": 259,
+    "budget_places": 12,
+    "study_plan_url": "",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638771477945654&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638771477945654"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 3,
+    "university": "МАИ",
+    "direction_code": "38055",
+    "competition_group": "Программная инженерия",
+    "program": "Программно-информационные системы",
+    "passing_score_2025": 279.0,
+    "dima_score": 259,
+    "budget_places": 17,
+    "study_plan_url": "",
+    "list_url": "https://priem.mai.ru/list/",
+    "parser": "mai",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 4,
+    "university": "МАИ",
+    "direction_code": "37316",
+    "competition_group": "Прикладная математика и информатика",
+    "program": "Информатика, \nПрограммная инженерия систем машинного обучения \n(2 разные, 1 список)",
+    "passing_score_2025": 275.0,
+    "dima_score": 259,
+    "budget_places": 91,
+    "study_plan_url": "",
+    "list_url": "https://priem.mai.ru/list/",
+    "parser": "mai",
+    "parser_meta": {},
+    "needs_filter": true
+  },
+  {
+    "id": 5,
+    "university": "МИРЭА",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Квантовое программирование",
+    "passing_score_2025": 274.0,
+    "dima_score": 259,
+    "budget_places": 16,
+    "study_plan_url": "",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638690003590454&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638690003590454"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 6,
+    "university": "МИРЭА",
+    "direction_code": "37316",
+    "competition_group": "Прикладная математика и информатика",
+    "program": "Системное программирование и компьютерные технологии (при поддержке Вега)",
+    "passing_score_2025": 273.0,
+    "dima_score": 259,
+    "budget_places": 19,
+    "study_plan_url": "",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638569831537974&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638569831537974"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 7,
+    "university": "МЭИ",
+    "direction_code": "37317",
+    "competition_group": "Фундаментальная информатика и информационные технологии",
+    "program": "",
+    "passing_score_2025": 271.0,
+    "dima_score": 269,
+    "budget_places": 20,
+    "study_plan_url": "",
+    "list_url": "https://pk.mpei.ru/info/entrants_list1986.html",
+    "parser": "mpei",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 8,
+    "university": "МИРЭА",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Технологии разработки ПО полного цикла (при поддержке Яндекс)",
+    "passing_score_2025": 271.0,
+    "dima_score": 259,
+    "budget_places": 33,
+    "study_plan_url": "",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638710286196022&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638710286196022"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 9,
+    "university": "МИРЭА",
+    "direction_code": "38055",
+    "competition_group": "Программная инженерия",
+    "program": "Разработка и дизайн компьютерных игр и мультимедийных приложений (при поддержке ВК)",
+    "passing_score_2025": 271.0,
+    "dima_score": 259,
+    "budget_places": 27,
+    "study_plan_url": "",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862533058433916214&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862533058433916214"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 10,
+    "university": "МИРЭА",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Технологии ИИ и анализ данных (при прддержке Яндекс)",
+    "passing_score_2025": 270.0,
+    "dima_score": 259,
+    "budget_places": 50,
+    "study_plan_url": "",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638703059410230&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638703059410230"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 11,
+    "university": "МАИ",
+    "direction_code": "37317",
+    "competition_group": "Фундаментальная информатика и информационные технологии",
+    "program": "Информатика и компьютерные науки, \nПрограммирование и технология разработки программных систем \n(2 разные, 1 список)",
+    "passing_score_2025": 269.0,
+    "dima_score": 259,
+    "budget_places": 80,
+    "study_plan_url": "",
+    "list_url": "https://priem.mai.ru/list/",
+    "parser": "mai",
+    "parser_meta": {},
+    "needs_filter": true
+  },
+  {
+    "id": 12,
+    "university": "МИРЭА",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Фуллстек разработка (при поддержке 1С и TopIT)",
+    "passing_score_2025": 268.0,
+    "dima_score": 259,
+    "budget_places": 91,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1196",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638717494107446&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638717494107446"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 13,
+    "university": "Финансовый университет",
+    "direction_code": "38055",
+    "competition_group": "Программная инженерия",
+    "program": "Инженер-разработчик программного обеспечения",
+    "passing_score_2025": 268.0,
+    "dima_score": 259,
+    "budget_places": 19,
+    "study_plan_url": "",
+    "list_url": "https://www.fa.ru/for-applicants/bachelor/Rateabit/applications.php",
+    "parser": "fa",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 14,
+    "university": "РЭУ им. Плеханова",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "",
+    "passing_score_2025": 267.0,
+    "dima_score": 259,
+    "budget_places": 56,
+    "study_plan_url": "",
+    "list_url": "https://abitrating.rea.ru/group/663548e0-11ad-11f1-8dba-5cba2c649f58",
+    "parser": "rea",
+    "parser_meta": {
+      "group_id": "663548e0-11ad-11f1-8dba-5cba2c649f58"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 15,
+    "university": "МИРЭА",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Квантовые коммуникации и вычисления (при поддержке Росатом и РЖД)",
+    "passing_score_2025": 265.0,
+    "dima_score": 259,
+    "budget_places": 26,
+    "study_plan_url": "нет учебного плана",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638636555574582&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638636555574582"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 16,
+    "university": "МИРЭА",
+    "direction_code": "38047",
+    "competition_group": "Прикладная математика",
+    "program": "Анализ данных",
+    "passing_score_2025": 265.0,
+    "dima_score": 259,
+    "budget_places": 21,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1183",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862532990899330358&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862532990899330358"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 17,
+    "university": "МИРЭА",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Разработка кросс-платформенных бизнес-приложений (при поддержке Яндекс)",
+    "passing_score_2025": 264.0,
+    "dima_score": 259,
+    "budget_places": 46,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1195",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638696623250742&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638696623250742"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 18,
+    "university": "МАИ",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "Прикладная информатика цифровых организаций",
+    "passing_score_2025": 263.0,
+    "dima_score": 259,
+    "budget_places": 19,
+    "study_plan_url": "",
+    "list_url": "https://priem.mai.ru/list/",
+    "parser": "mai",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 19,
+    "university": "МИРЭА",
+    "direction_code": "37316",
+    "competition_group": "Прикладная математика и информатика",
+    "program": "Математическое моделирование и вычислительная техника (при поддержке Транснефть)",
+    "passing_score_2025": 263.0,
+    "dima_score": 259,
+    "budget_places": 35,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1181",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638563243334966&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638563243334966"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 20,
+    "university": "МИРЭА",
+    "direction_code": "38055",
+    "competition_group": "Программная инженерия",
+    "program": "Интеллектуальные системы поддержки принятия решений (при поддержке Samsung)",
+    "passing_score_2025": 263.0,
+    "dima_score": 259,
+    "budget_places": 25,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1210",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638745412443446&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638745412443446"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 21,
+    "university": "МАИ",
+    "direction_code": "38047",
+    "competition_group": "Прикладная математика",
+    "program": "Математическое и компьютерное моделирование в механике, \nМатематическое и программное обеспечение систем обработки информации и управления \n(2 разные, 1 список)",
+    "passing_score_2025": 262.0,
+    "dima_score": 259,
+    "budget_places": 40,
+    "study_plan_url": "",
+    "list_url": "https://priem.mai.ru/list/",
+    "parser": "mai",
+    "parser_meta": {},
+    "needs_filter": true
+  },
+  {
+    "id": 22,
+    "university": "МЭИ",
+    "direction_code": "37316",
+    "competition_group": "Прикладная математика и информатика",
+    "program": "Математическое и программное обеспечение вычислительных машин и компьютерных сетей",
+    "passing_score_2025": 262.0,
+    "dima_score": 269,
+    "budget_places": 100,
+    "study_plan_url": "",
+    "list_url": "https://pk.mpei.ru/info/entrants_list16.html",
+    "parser": "mpei",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 23,
+    "university": "МЭИ",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "",
+    "passing_score_2025": 261.0,
+    "dima_score": 269,
+    "budget_places": 30,
+    "study_plan_url": "",
+    "list_url": "https://pk.mpei.ru/info/entrants_list35.html",
+    "parser": "mpei",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 24,
+    "university": "МИРЭА",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Безопасность программных решений (при поддержке Яндекс)",
+    "passing_score_2025": 261.0,
+    "dima_score": 259,
+    "budget_places": 34,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1863",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638682977082678&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638682977082678"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 25,
+    "university": "РАНХиГС",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "Цифровые технологии и разработка информационных систем",
+    "passing_score_2025": 261.0,
+    "dima_score": 259,
+    "budget_places": 17,
+    "study_plan_url": "https://files.ranepa.ru/public/l1f22792db9499f013a4edc746cdbdc1a7754723af98bab77bc30ef1ced5424f3e750a89b7fc94cf82623a7c658dac15ac6f1c1d1840a3036823fc5790f50f495",
+    "list_url": "https://my.ranepa.ru/online/pk26/list/list.php?FT=1&FL=0&FO=2&F1=3dfc1680-5eff-4887-a318-288990d0e055&F2=bd13b92c-ccbe-11e5-80c3-00155d171400&F3=3f4ee63d-bf12-11f0-aa18-00620b9300d1&F4=817a85ac-f5d9-11f0-9fa8-00620bc81861",
+    "parser": "ranepa",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 26,
+    "university": "Московский политех",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Системная и программная инженерия; Искусственный интеллект и\nмашинное обучение",
+    "passing_score_2025": 260.0,
+    "dima_score": 261,
+    "budget_places": 50,
+    "study_plan_url": "https://mospolytech.ru/upload/iblock/f82/00xgpaxbcsgk4x7w3i7wtquholokh66r/09.03.01_D_IIMO_UP.pdf",
+    "list_url": "https://mospolytech.ru/postupayushchim/priem-v-universitet/rating-abiturientov/?qs=MDAwMDAwMDY2XzAxfDA5LjAzLjAxX9Ch0LjRgdGC0LXQvNC90LDRjyDQuCDQv9GA0L7Qs9GA0LDQvNC80L3QsNGPINC40L3QttC10L3QtdGA0LjRj3zQntGH0L3QsNGPfNCR0Y7QtNC20LXRgtC90LDRjyDQvtGB0L3QvtCy0LA%3D",
+    "parser": "mospolytech",
+    "parser_meta": {
+      "select1": "000000066_01",
+      "specCode": "09.03.01_Системная и программная инженерия",
+      "eduForm": "Очная",
+      "eduFin": "Бюджетная основа"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 27,
+    "university": "РЭУ им. Плеханова",
+    "direction_code": "37682",
+    "competition_group": "Математическое обеспечение и администрирование информационных систем",
+    "program": "",
+    "passing_score_2025": 260.0,
+    "dima_score": 259,
+    "budget_places": 60,
+    "study_plan_url": "",
+    "list_url": "https://abitrating.rea.ru/group/66353f7b-11ad-11f1-8dba-5cba2c649f58",
+    "parser": "rea",
+    "parser_meta": {
+      "group_id": "66353f7b-11ad-11f1-8dba-5cba2c649f58"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 28,
+    "university": "МИРЭА",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "Управление данными (при поддержке Loginom)",
+    "passing_score_2025": 260.0,
+    "dima_score": 259,
+    "budget_places": 28,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1203",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638731367816502&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638731367816502"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 29,
+    "university": "МИРЭА",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Интеллектуальные системы управления и обработки информации (при поддержке ГосНИИ)",
+    "passing_score_2025": 259.0,
+    "dima_score": 259,
+    "budget_places": 11,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1192",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638623056207158&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638623056207158"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 30,
+    "university": "РЭУ им. Плеханова",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "",
+    "passing_score_2025": 258.0,
+    "dima_score": 259,
+    "budget_places": 33,
+    "study_plan_url": "",
+    "list_url": "https://abitrating.rea.ru/group/66354974-11ad-11f1-8dba-5cba2c649f58",
+    "parser": "rea",
+    "parser_meta": {
+      "group_id": "66354974-11ad-11f1-8dba-5cba2c649f58"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 31,
+    "university": "МАИ",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Информационные системы аэрокосмических комплексов\nИнформационные системы испытаний космических ЛА\nКонструирование и производство средств информационной и вычислительной техники\n(3 разных, 1 список)",
+    "passing_score_2025": 256.0,
+    "dima_score": 259,
+    "budget_places": 28,
+    "study_plan_url": "",
+    "list_url": "https://priem.mai.ru/list/",
+    "parser": "mai",
+    "parser_meta": {},
+    "needs_filter": true
+  },
+  {
+    "id": 32,
+    "university": "МИРЭА",
+    "direction_code": "38055",
+    "competition_group": "Программная инженерия",
+    "program": "Проектирование и разработка сред и приложений дополненной и виртуальной реальности (при поддержке AVM Technology)",
+    "passing_score_2025": 256.0,
+    "dima_score": 259,
+    "budget_places": 27,
+    "study_plan_url": "нет учебного плана",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862533052231589174&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862533052231589174"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 33,
+    "university": "СТАНКИН",
+    "direction_code": "38055",
+    "competition_group": "Программная инженерия",
+    "program": "Программная инженерия",
+    "passing_score_2025": 255.0,
+    "dima_score": 259,
+    "budget_places": 47,
+    "study_plan_url": "",
+    "list_url": "https://priem.stankin.ru/bakalavriatispetsialitet/ranked-lists/",
+    "parser": "stankin",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 34,
+    "university": "РЭУ им. Плеханова",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "",
+    "passing_score_2025": 255.0,
+    "dima_score": 259,
+    "budget_places": 16,
+    "study_plan_url": "",
+    "list_url": "https://abitrating.rea.ru/group/663540a3-11ad-11f1-8dba-5cba2c649f58",
+    "parser": "rea",
+    "parser_meta": {
+      "group_id": "663540a3-11ad-11f1-8dba-5cba2c649f58"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 35,
+    "university": "МЭИ",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "",
+    "passing_score_2025": 253.0,
+    "dima_score": 269,
+    "budget_places": 50,
+    "study_plan_url": "",
+    "list_url": "https://pk.mpei.ru/info/entrants_list1446.html",
+    "parser": "mpei",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 36,
+    "university": "РАНХиГС",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "Искусственный интеллект и машинное обучение",
+    "passing_score_2025": 253.0,
+    "dima_score": 259,
+    "budget_places": 18,
+    "study_plan_url": "https://files.ranepa.ru/public/le5f0980031394d31aced97612addd4e9983d732e4723e58c4cff9671c2bfe03e804d59bb733e781502be39a98f1c4988cc43a2193972de73e61e51b59299a4bf",
+    "list_url": "https://my.ranepa.ru/online/pk26/list/list.php?FT=1&FL=0&FO=2&F1=3dfc1680-5eff-4887-a318-288990d0e055&F2=bd13b92c-ccbe-11e5-80c3-00155d171400&F3=3f4ee63d-bf12-11f0-aa18-00620b9300d1&F4=5b1b584e-f55d-11f0-9fa8-00620bc81861",
+    "parser": "ranepa",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 37,
+    "university": "МАИ",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Программирование и аппаратное обеспечение вычислительных комплексов\nПрограммное обеспечение средств вычислительной техники и автоматизированных систем\nАвтоматизированное управление бизнес-процессами и финансами\nСистемы интеллектуального мониторинга\n(4 разных, 1 список)",
+    "passing_score_2025": 252.0,
+    "dima_score": 259,
+    "budget_places": 155,
+    "study_plan_url": "",
+    "list_url": "https://priem.mai.ru/list/",
+    "parser": "mai",
+    "parser_meta": {},
+    "needs_filter": true
+  },
+  {
+    "id": 38,
+    "university": "МИРЭА",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Компьютерный дизайн",
+    "passing_score_2025": 252.0,
+    "dima_score": 259,
+    "budget_places": 40,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1197",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862533207107312950&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862533207107312950"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 39,
+    "university": "МИРЭА",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Технологии разработки платформенных бизнес-приложений (при поддержке 1С и TopIT)",
+    "passing_score_2025": 251.0,
+    "dima_score": 259,
+    "budget_places": 40,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1946",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862533213266648374&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862533213266648374"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 40,
+    "university": "Московский политех",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "Большие и открытые данные",
+    "passing_score_2025": 250.0,
+    "dima_score": 261,
+    "budget_places": 50,
+    "study_plan_url": "https://mospolytech.ru/upload/iblock/038/5f485t4lzae3mqsi21jfdelqsn5pqzvk/09.03.03_D_BOD_UP.pdf",
+    "list_url": "https://mospolytech.ru/postupayushchim/priem-v-universitet/rating-abiturientov/?qs=MDAwMDAwMDY2XzAxfDA5LjAzLjAzX9CR0L7Qu9GM0YjQuNC1INC4INC%2B0YLQutGA0YvRgtGL0LUg0LTQsNC90L3Ri9C1fNCe0YfQvdCw0Y980JHRjtC00LbQtdGC0L3QsNGPINC%2B0YHQvdC%2B0LLQsA%3D%3D",
+    "parser": "mospolytech",
+    "parser_meta": {
+      "select1": "000000066_01",
+      "specCode": "09.03.03_Большие и открытые данные",
+      "eduForm": "Очная",
+      "eduFin": "Бюджетная основа"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 41,
+    "university": "МИРЭА",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "Информатизация организаций  (при поддержке 1С, TopIT и Яндекс)",
+    "passing_score_2025": 250.0,
+    "dima_score": 259,
+    "budget_places": 27,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1202",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638724428340534&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638724428340534"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 42,
+    "university": "Финансовый университет",
+    "direction_code": "38055",
+    "competition_group": "Программная инженерия",
+    "program": "Разработка и внедрение информационно-аналитических систем",
+    "passing_score_2025": 250.0,
+    "dima_score": 259,
+    "budget_places": 19,
+    "study_plan_url": "",
+    "list_url": "https://www.fa.ru/for-applicants/bachelor/Rateabit/applications.php",
+    "parser": "fa",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 43,
+    "university": "МИРЭА",
+    "direction_code": "38055",
+    "competition_group": "Программная инженерия",
+    "program": "Информационные системы управления ресурсами предприятия (при поддержке 1С и TopIT)",
+    "passing_score_2025": 249.0,
+    "dima_score": 259,
+    "budget_places": 17,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1205",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638752208264502&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638752208264502"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 44,
+    "university": "СТАНКИН",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Разработка программных комплексов в рамках цифровой трансформации деятельности предприятий:",
+    "passing_score_2025": 248.0,
+    "dima_score": 259,
+    "budget_places": 45,
+    "study_plan_url": "",
+    "list_url": "https://priem.stankin.ru/bakalavriatispetsialitet/ranked-lists/",
+    "parser": "stankin",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 45,
+    "university": "МЭИ",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "",
+    "passing_score_2025": 248.0,
+    "dima_score": 269,
+    "budget_places": 201,
+    "study_plan_url": "",
+    "list_url": "https://pk.mpei.ru/info/entrants_list14.html#terms",
+    "parser": "mpei",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 46,
+    "university": "МИРЭА",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Инфраструктура информационных технологий (при поддержке КРОК)",
+    "passing_score_2025": 248.0,
+    "dima_score": 259,
+    "budget_places": 27,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1189",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638630198058294&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638630198058294"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 47,
+    "university": "СТАНКИН",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Разработка программных комплексов",
+    "passing_score_2025": 248.0,
+    "dima_score": 259,
+    "budget_places": 19,
+    "study_plan_url": "",
+    "list_url": "https://priem.stankin.ru/bakalavriatispetsialitet/ranked-lists/",
+    "parser": "stankin",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 48,
+    "university": "МИРЭА",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Технологии и системы ИИ в здравоохранении (совместно с Центр диагностики и телемедицины, Третье мнение; при поддержке Сберздоровье и ???)",
+    "passing_score_2025": 246.0,
+    "dima_score": 259,
+    "budget_places": 21,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1861",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638655880830262&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638655880830262"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 49,
+    "university": "МИРЭА",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Технологии виртуальных пространств",
+    "passing_score_2025": 246.0,
+    "dima_score": 259,
+    "budget_places": 48,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1864",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862533166914346294&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862533166914346294"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 50,
+    "university": "МИРЭА",
+    "direction_code": "38055",
+    "competition_group": "Программная инженерия",
+    "program": "Информационные технологии в атомной отрасли (при поддержке Росатом)",
+    "passing_score_2025": 246.0,
+    "dima_score": 259,
+    "budget_places": 16,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1359",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862642206348680502&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862642206348680502"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 51,
+    "university": "МИРЭА",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Аппаратное программирование встраиваемых систем  (при поддержке Итэлма)",
+    "passing_score_2025": 245.0,
+    "dima_score": 259,
+    "budget_places": 10,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1938",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638616596978998&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638616596978998"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 52,
+    "university": "МИРЭА",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Киберфизические системы (при поддержке Сбер)",
+    "passing_score_2025": 244.0,
+    "dima_score": 259,
+    "budget_places": 20,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1191",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638643005365558&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638643005365558"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 53,
+    "university": "МИРЭА",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "Цифровая трансформация (при поддержке 1С, TopIT и Robin)",
+    "passing_score_2025": 244.0,
+    "dima_score": 259,
+    "budget_places": 27,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1204",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638738496036150&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638738496036150"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 54,
+    "university": "Финансовый университет",
+    "direction_code": "37316",
+    "competition_group": "Прикладная математика и информатика",
+    "program": "Прикладное машинное обучение",
+    "passing_score_2025": 244.0,
+    "dima_score": 259,
+    "budget_places": 89,
+    "study_plan_url": "",
+    "list_url": "https://www.fa.ru/for-applicants/bachelor/Rateabit/applications.php",
+    "parser": "fa",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 55,
+    "university": "СТАНКИН",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "Математическое и компьютерное моделирование процессов и систем",
+    "passing_score_2025": 241.0,
+    "dima_score": 259,
+    "budget_places": 40,
+    "study_plan_url": "",
+    "list_url": "https://priem.stankin.ru/bakalavriatispetsialitet/ranked-lists/",
+    "parser": "stankin",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 56,
+    "university": "СТАНКИН",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "Управление данными",
+    "passing_score_2025": 241.0,
+    "dima_score": 259,
+    "budget_places": 57,
+    "study_plan_url": "",
+    "list_url": "https://priem.stankin.ru/bakalavriatispetsialitet/ranked-lists/",
+    "parser": "stankin",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 57,
+    "university": "Московский политех",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "Разработка и интеграция бизнес-приложений",
+    "passing_score_2025": 240.0,
+    "dima_score": 261,
+    "budget_places": 50,
+    "study_plan_url": "https://mospolytech.ru/upload/iblock/3c3/nhuoqcots8b5l7fn20gv0uexg1r0rxfd/09.03.03_D_RIBP_KIS_UP.pdf",
+    "list_url": "https://mospolytech.ru/postupayushchim/priem-v-universitet/rating-abiturientov/?qs=MDAwMDAwMDY2XzAxfDA5LjAzLjAzX9Cg0LDQt9GA0LDQsdC%2B0YLQutCwINC4INC40L3RgtC10LPRgNCw0YbQuNGPINCx0LjQt9C90LXRgS3Qv9GA0LjQu9C%2B0LbQtdC90LjQuXzQntGH0L3QsNGPfNCR0Y7QtNC20LXRgtC90LDRjyDQvtGB0L3QvtCy0LA%3D",
+    "parser": "mospolytech",
+    "parser_meta": {
+      "select1": "000000066_01",
+      "specCode": "09.03.03_Разработка и интеграция бизнес-приложений",
+      "eduForm": "Очная",
+      "eduFin": "Бюджетная основа"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 58,
+    "university": "Московский политех",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Разработка инженерного ПО",
+    "passing_score_2025": 239.0,
+    "dima_score": 261,
+    "budget_places": 70,
+    "study_plan_url": "https://mospolytech.ru/upload/iblock/b91/ptfdswtnemkitpuar64nw4cuu0owjmlq/09.03.01_D_RIPO_SAPR_UP.pdf",
+    "list_url": "https://mospolytech.ru/postupayushchim/priem-v-universitet/rating-abiturientov/?qs=MDAwMDAwMDY2XzAxfDA5LjAzLjAxX9Cg0LDQt9GA0LDQsdC%2B0YLQutCwINC40L3QttC10L3QtdGA0L3QvtCz0L4g0L%2FRgNC%2B0LPRgNCw0LzQvNC90L7Qs9C%2BINC%2B0LHQtdGB0L%2FQtdGH0LXQvdC40Y980J7Rh9C90LDRj3zQkdGO0LTQttC10YLQvdCw0Y8g0L7RgdC90L7QstCw",
+    "parser": "mospolytech",
+    "parser_meta": {
+      "select1": "000000066_01",
+      "specCode": "09.03.01_Разработка инженерного программного обеспечения",
+      "eduForm": "Очная",
+      "eduFin": "Бюджетная основа"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 59,
+    "university": "РУТ",
+    "direction_code": "37689",
+    "competition_group": "Прикладная информатика",
+    "program": "Прикладная информатика в экономике и бизнесе",
+    "passing_score_2025": 237.0,
+    "dima_score": 259,
+    "budget_places": 66,
+    "study_plan_url": "",
+    "list_url": "https://www.miit.ru/admissions/degrees/1000016?year=2026",
+    "parser": "miit",
+    "parser_meta": {
+      "degree_id": "1000016"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 60,
+    "university": "РУТ",
+    "direction_code": "37316",
+    "competition_group": "Прикладная математика и информатика",
+    "program": "Математическое моделирование и системный анализ",
+    "passing_score_2025": 236.0,
+    "dima_score": 259,
+    "budget_places": 13,
+    "study_plan_url": "",
+    "list_url": "https://www.miit.ru/admissions/degrees/1000001?year=2026",
+    "parser": "miit",
+    "parser_meta": {
+      "degree_id": "1000001"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 61,
+    "university": "СТАНКИН",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Цифровые системы управления в промышленности и социально-экономической сфере",
+    "passing_score_2025": 235.0,
+    "dima_score": 259,
+    "budget_places": 53,
+    "study_plan_url": "",
+    "list_url": "https://priem.stankin.ru/bakalavriatispetsialitet/ranked-lists/",
+    "parser": "stankin",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 62,
+    "university": "СТАНКИН",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Разработка и внедрение корпоративных информационных систем",
+    "passing_score_2025": 235.0,
+    "dima_score": 259,
+    "budget_places": 40,
+    "study_plan_url": "",
+    "list_url": "https://priem.stankin.ru/bakalavriatispetsialitet/ranked-lists/",
+    "parser": "stankin",
+    "parser_meta": {},
+    "needs_filter": false
+  },
+  {
+    "id": 63,
+    "university": "Московский политех",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Программирование электронных устройств и систем; Информационные системы умных пространств",
+    "passing_score_2025": 233.0,
+    "dima_score": 261,
+    "budget_places": 60,
+    "study_plan_url": "https://mospolytech.ru/upload/iblock/51e/n7ienywojn3s2jbj600ng3161xzih53y/09.03.01_D_PEUS_UP.pdf",
+    "list_url": "https://mospolytech.ru/postupayushchim/priem-v-universitet/rating-abiturientov/?qs=MDAwMDAwMDY2XzAxfDA5LjAzLjAxX9Cf0YDQvtCz0YDQsNC80LzQuNGA0L7QstCw0L3QuNC1INGN0LvQtdC60YLRgNC%2B0L3QvdGL0YUg0YPRgdGC0YDQvtC50YHRgtCyINC4INGB0LjRgdGC0LXQvDsg0JjQvdGE0L7RgNC80LDRhtC40L7QvdC90YvQtSDRgdC40YHRgtC10LzRiyDRg9C80L3Ri9GFINC%2F0YDQvtGB0YLRgNCw0L3RgdGC0LJ80J7Rh9C90LDRj3zQkdGO0LTQttC10YLQvdCw0Y8g0L7RgdC90L7QstCw",
+    "parser": "mospolytech",
+    "parser_meta": {
+      "select1": "000000066_01",
+      "specCode": "09.03.01_Программирование электронных устройств и систем; Информационные системы умных пространств",
+      "eduForm": "Очная",
+      "eduFin": "Бюджетная основа"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 64,
+    "university": "Московский политех",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Интеллектуальные информационно-измерительные системы",
+    "passing_score_2025": 229.0,
+    "dima_score": 261,
+    "budget_places": 30,
+    "study_plan_url": "https://mospolytech.ru/upload/iblock/118/y3rfuuqr66jq1ap2edqrxyktnnd5afbn/KD_Intellektualnye_informatsionno_izmeritelnye_sistemy.pdf",
+    "list_url": "https://mospolytech.ru/postupayushchim/priem-v-universitet/rating-abiturientov/?qs=MDAwMDAwMDY2XzAxfDA5LjAzLjAyX9CY0L3RgtC10LvQu9C10LrRgtGD0LDQu9GM0L3Ri9C1INC40L3RhNC%2B0YDQvNCw0YbQuNC%2B0L3QvdC%2BLdC40LfQvNC10YDQuNGC0LXQu9GM0L3Ri9C1INGB0LjRgdGC0LXQvNGLfNCe0YfQvdCw0Y980JHRjtC00LbQtdGC0L3QsNGPINC%2B0YHQvdC%2B0LLQsA%3D%3D",
+    "parser": "mospolytech",
+    "parser_meta": {
+      "select1": "000000066_01",
+      "specCode": "09.03.02_Интеллектуальные информационно-измерительные системы",
+      "eduForm": "Очная",
+      "eduFin": "Бюджетная основа"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 65,
+    "university": "Московский политех",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Интеллектуальные беспилотные системы",
+    "passing_score_2025": 225.0,
+    "dima_score": 261,
+    "budget_places": 70,
+    "study_plan_url": "https://mospolytech.ru/upload/iblock/a3f/fzov3hbcvwv06rajs7i437f7z2e959sz/09.03.01_D_IBS_KFS_UP.pdf",
+    "list_url": "https://mospolytech.ru/postupayushchim/priem-v-universitet/rating-abiturientov/?qs=MDAwMDAwMDY2XzAxfDA5LjAzLjAxX9CY0L3RgtC10LvQu9C10LrRgtGD0LDQu9GM0L3Ri9C1INCx0LXRgdC%2F0LjQu9C%2B0YLQvdGL0LUg0YHQuNGB0YLQtdC80Yt80J7Rh9C90LDRj3zQkdGO0LTQttC10YLQvdCw0Y8g0L7RgdC90L7QstCw",
+    "parser": "mospolytech",
+    "parser_meta": {
+      "select1": "000000066_01",
+      "specCode": "09.03.01_Интеллектуальные беспилотные системы",
+      "eduForm": "Очная",
+      "eduFin": "Бюджетная основа"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 66,
+    "university": "РУТ",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "IT-сервисы и технологии обработки данных на транспорте",
+    "passing_score_2025": 223.0,
+    "dima_score": 259,
+    "budget_places": 20,
+    "study_plan_url": "",
+    "list_url": "https://www.miit.ru/admissions/degrees/1000012?year=2026",
+    "parser": "miit",
+    "parser_meta": {
+      "degree_id": "1000012"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 67,
+    "university": "РУТ",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Вычислительные системы и сети",
+    "passing_score_2025": 223.0,
+    "dima_score": 259,
+    "budget_places": 24,
+    "study_plan_url": "",
+    "list_url": "https://www.miit.ru/admissions/degrees/1000012?year=2026",
+    "parser": "miit",
+    "parser_meta": {
+      "degree_id": "1000012"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 68,
+    "university": "РУТ",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Технологии разработки программного обеспечения",
+    "passing_score_2025": 223.0,
+    "dima_score": 259,
+    "budget_places": 47,
+    "study_plan_url": "",
+    "list_url": "https://www.miit.ru/admissions/degrees/1000012?year=2026",
+    "parser": "miit",
+    "parser_meta": {
+      "degree_id": "1000012"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 69,
+    "university": "РУТ",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Цифровая инженерия транспортных процессов",
+    "passing_score_2025": 223.0,
+    "dima_score": 259,
+    "budget_places": 23,
+    "study_plan_url": "",
+    "list_url": "https://www.miit.ru/admissions/degrees/1000012?year=2026",
+    "parser": "miit",
+    "parser_meta": {
+      "degree_id": "1000012"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 70,
+    "university": "РУТ",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Системы автоматизированного проектирования",
+    "passing_score_2025": 223.0,
+    "dima_score": 259,
+    "budget_places": 24,
+    "study_plan_url": "",
+    "list_url": "https://www.miit.ru/admissions/degrees/1000013?year=2026",
+    "parser": "miit",
+    "parser_meta": {
+      "degree_id": "1000013"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 71,
+    "university": "Московский политех",
+    "direction_code": "37316",
+    "competition_group": "Прикладная математика и информатика",
+    "program": "Программирование и интеллектуальные системы управления транспортом",
+    "passing_score_2025": 221.0,
+    "dima_score": 261,
+    "budget_places": 60,
+    "study_plan_url": "https://mospolytech.ru/upload/iblock/bfe/rxcr882i2shbzk8pzaiade14o727ajv8/01.03.02_Programmirovanie_i_intellektualnye_sistemy_upravleniya_transportom_2025.pdf",
+    "list_url": "https://mospolytech.ru/postupayushchim/priem-v-universitet/rating-abiturientov/?qs=MDAwMDAwMDY2XzAxfDAxLjAzLjAyX9Cf0YDQvtCz0YDQsNC80LzQuNGA0L7QstCw0L3QuNC1INC4INC40L3RgtC10LvQu9C10LrRgtGD0LDQu9GM0L3Ri9C1INGB0LjRgdGC0LXQvNGLINGD0L%2FRgNCw0LLQu9C10L3QuNGPINGC0YDQsNC90YHQv9C%2B0YDRgtC%2B0Lx80J7Rh9C90LDRj3zQkdGO0LTQttC10YLQvdCw0Y8g0L7RgdC90L7QstCw",
+    "parser": "mospolytech",
+    "parser_meta": {
+      "select1": "000000066_01",
+      "specCode": "01.03.02_Программирование и интеллектуальные системы управления транспортом",
+      "eduForm": "Очная",
+      "eduFin": "Бюджетная основа"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 72,
+    "university": "РУТ",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Информационные системы и технологии на транспорте",
+    "passing_score_2025": 221.0,
+    "dima_score": 259,
+    "budget_places": 24,
+    "study_plan_url": "",
+    "list_url": "https://www.miit.ru/admissions/degrees/1000015?year=2026",
+    "parser": "miit",
+    "parser_meta": {
+      "degree_id": "1000015"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 73,
+    "university": "РУТ",
+    "direction_code": "37324",
+    "competition_group": "Информационные системы и технологии",
+    "program": "Технологии искусственного интеллекта в транспортных системах",
+    "passing_score_2025": 221.0,
+    "dima_score": 259,
+    "budget_places": 21,
+    "study_plan_url": "",
+    "list_url": "https://www.miit.ru/admissions/degrees/1000015?year=2026",
+    "parser": "miit",
+    "parser_meta": {
+      "degree_id": "1000015"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 74,
+    "university": "РУТ",
+    "direction_code": "37317",
+    "competition_group": "Фундаментальная информатика и информационные технологии",
+    "program": "Квантовые вычислительные системы и сети",
+    "passing_score_2025": 218.0,
+    "dima_score": 259,
+    "budget_places": 8,
+    "study_plan_url": "",
+    "list_url": "https://www.miit.ru/admissions/degrees/1000002?year=2026",
+    "parser": "miit",
+    "parser_meta": {
+      "degree_id": "1000002"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 75,
+    "university": "МИРЭА",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Умные сервисы высокотехнологичных производств",
+    "passing_score_2025": 215.0,
+    "dima_score": 259,
+    "budget_places": 8,
+    "study_plan_url": "https://priem.mirea.ru/guide-direction?direction_id=1962",
+    "list_url": "https://priem.mirea.ru/accepted-entrants-list/competition?comp_ids=1862638662387244342&edu_level=2&org_unit_id=1484028700495285107&edu_form_id=1",
+    "parser": "mirea",
+    "parser_meta": {
+      "comp_id": "1862638662387244342"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 76,
+    "university": "Московский политех",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Искусственный интеллект и машинное обучение",
+    "passing_score_2025": 0.0,
+    "dima_score": 261,
+    "budget_places": 65,
+    "study_plan_url": "",
+    "list_url": "https://mospolytech.ru/postupayushchim/priem-v-universitet/rating-abiturientov/?qs=MDAwMDAwMDY2XzAxfDA5LjAzLjAxX9CY0YHQutGD0YHRgdGC0LLQtdC90L3Ri9C5INC40L3RgtC10LvQu9C10LrRgiDQuCDQvNCw0YjQuNC90L3QvtC1INC%2B0LHRg9GH0LXQvdC40LV80J7Rh9C90LDRj3zQkdGO0LTQttC10YLQvdCw0Y8g0L7RgdC90L7QstCw",
+    "parser": "mospolytech",
+    "parser_meta": {
+      "select1": "000000066_01",
+      "specCode": "09.03.01_Искусственный интеллект и машинное обучение",
+      "eduForm": "Очная",
+      "eduFin": "Бюджетная основа"
+    },
+    "needs_filter": false
+  },
+  {
+    "id": 77,
+    "university": "РГУ им. Губкина",
+    "direction_code": "36959",
+    "competition_group": "Информатика и вычислительная техника",
+    "program": "Информатика и вычислительная техника (конкурсная группа 17, основные места в рамках КЦП)",
+    "passing_score_2025": 0,
+    "dima_score": 259,
+    "budget_places": 90,
+    "study_plan_url": "",
+    "list_url": "https://transfer.priem.gubkin.ru/abiturients_list/",
+    "parser": "gubkin",
+    "parser_meta": {
+      "contest_group_id": "2455",
+      "contest_group_number": 17,
+      "education_type_id": 1,
+      "education_form_id": 1,
+      "faculty_id": 5
+    },
+    "needs_filter": false
+  }
+]
