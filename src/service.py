@@ -9,7 +9,7 @@ from .config_loader import load_programs
 from .models import ProgramConfig, ProgramResult, RankSnapshot
 from .parsers.registry import get_parser
 from .ranking import build_rank_snapshot
-from .rut_merge import fetch_miit_with_cache, merge_rut_programs
+from .tracked_universities import filter_programs, filter_results
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS_PATH = ROOT / "data" / "latest_results.json"
@@ -82,22 +82,12 @@ def build_dashboard_row(program: ProgramConfig, result: ProgramResult) -> Dashbo
 
 
 def refresh_all(programs: list[ProgramConfig] | None = None) -> list[DashboardRow]:
-    programs = programs or load_programs()
+    programs = filter_programs(programs or load_programs())
     rows: list[DashboardRow] = []
-    rut_entries: list[tuple[ProgramConfig, ProgramResult]] = []
-    miit_cache: dict[str, ProgramResult] = {}
 
     for program in programs:
         parser = get_parser(program.parser)
-        if program.parser == "miit":
-            result = fetch_miit_with_cache(program, parser, miit_cache)
-            rut_entries.append((program, result))
-            continue
-
         result = parser.fetch(program)
-        rows.append(build_dashboard_row(program, result))
-
-    for program, result in merge_rut_programs(rut_entries):
         rows.append(build_dashboard_row(program, result))
 
     rows.sort(key=lambda row: (row.university, row.mega_direction, row.program_id))
@@ -117,4 +107,4 @@ def save_results(rows: list[DashboardRow]) -> None:
 def load_results() -> dict:
     if not RESULTS_PATH.exists():
         return {"generated_at": None, "rows": []}
-    return json.loads(RESULTS_PATH.read_text(encoding="utf-8"))
+    return filter_results(json.loads(RESULTS_PATH.read_text(encoding="utf-8")))

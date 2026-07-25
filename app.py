@@ -13,6 +13,7 @@ import streamlit as st
 from src.config_loader import load_programs
 from src.parsers.registry import PARSERS
 from src.service import load_results, refresh_all
+from src.tracked_universities import TRACKED_UNIVERSITIES, filter_programs
 
 st.set_page_config(page_title="Мониторинг поступления Димы", layout="wide")
 
@@ -86,10 +87,10 @@ def render_table(rows: list[dict]) -> None:
 st.title("Мониторинг поступления Димы")
 st.caption("Данные из `ВУЗы.xlsx`. Обновляйте списки периодически до 25.07.")
 
-programs = load_programs()
+programs = filter_programs(load_programs())
 col1, col2, col3 = st.columns(3)
 col1.metric("Направлений", len(programs))
-col2.metric("Вузов", len({p.university for p in programs}))
+col2.metric("Вузов", len(TRACKED_UNIVERSITIES))
 col3.metric("Парсеры готовы", "9 / 9")
 
 if st.button("Обновить сейчас", type="primary"):

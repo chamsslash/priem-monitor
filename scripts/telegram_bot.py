@@ -12,7 +12,15 @@ if str(ROOT) not in sys.path:
 
 from src.run_update import UpdateStatus, run_update
 from src.service import load_results
-from src.telegram_api import TelegramAPIError, answer_callback_query, get_updates, load_offset, save_offset, send_message
+from src.telegram_api import (
+    TelegramAPIError,
+    answer_callback_query,
+    edit_message_text,
+    get_updates,
+    load_offset,
+    save_offset,
+    send_message,
+)
 from src.telegram_config import load_telegram_config
 from src.telegram_format import format_push_message
 from src.telegram_notify import is_allowed, send_status, send_to_chats, send_university_report
@@ -38,6 +46,9 @@ def _welcome(chat_id: int) -> str:
         "Команды:\n"
         "/статус — общая сводка и выбор вуза\n"
         "/обновить — загрузить свежие списки\n"
+        "/робот [вуз] — симуляция зачисления по приоритетам\n"
+        "/робот обновить [вуз] — обновить кэш списков робота\n"
+        "/приоритет [вуз] — показать и изменить приоритеты (кнопки)\n"
         "/help — справка\n\n"
         f"Ваш chat_id: {chat_id}\n"
         "Передайте его администратору, чтобы получить доступ."
@@ -45,12 +56,184 @@ def _welcome(chat_id: int) -> str:
 
 
 def _help_text() -> str:
+    from src.robot.universities import SUPPORTED_UNIVERSITIES, robot_ready_universities
+
+    supported = ", ".join(sorted(SUPPORTED_UNIVERSITIES))
+    ready = ", ".join(sorted(robot_ready_universities())) if robot_ready_universities() else "пока нет"
     return (
         "Доступные команды:\n"
         "/статус — общая сводка и меню выбора вуза\n"
         "/обновить — запустить парсинг (работает, пока включён Mac)\n"
+        f"/робот [{supported}] — симуляция робота зачисления\n"
+        f"/робот обновить [{supported}] — обновить кэш списков робота (сейчас: {ready})\n"
+        f"/приоритет [{supported}] — текущие приоритеты и настройка кнопками\n"
         "/help — эта справка"
     )
+
+
+def _send_priority_view(
+    config,
+    chat_id: int,
+    university: str = "МИРЭА",
+    *,
+    reply_to: int | None = None,
+) -> None:
+    from src.robot.telegram_priorities import (
+        build_priority_view_keyboard,
+        format_priority_view,
+        load_priority_editor,
+    )
+
+    state = load_priority_editor(chat_id, university=university)
+    send_message(
+        config.bot_token,
+        chat_id,
+        format_priority_view(state, editing=False),
+        reply_to=reply_to,
+        reply_markup=build_priority_view_keyboard(),
+    )
+
+
+def _send_priority_editor(
+    config,
+    chat_id: int,
+    university: str = "МИРЭА",
+    *,
+    reply_to: int | None = None,
+) -> None:
+    from src.robot.telegram_priorities import (
+        build_priority_keyboard,
+        format_priority_view,
+        load_priority_editor,
+        save_priority_editor,
+    )
+
+    state = load_priority_editor(chat_id, university=university)
+    save_priority_editor(chat_id, state)
+    send_message(
+        config.bot_token,
+        chat_id,
+        format_priority_view(state, editing=True),
+        reply_to=reply_to,
+        reply_markup=build_priority_keyboard(state),
+    )
+
+
+def _handle_priority_callback(config, callback_query: dict) -> None:
+    from src.robot.priorities import save_priority_ids
+    from src.robot.telegram_priorities import (
+        build_priority_keyboard,
+        clear_priority_session,
+        format_priority_view,
+        format_saved_confirmation,
+        load_priority_editor,
+        move_program,
+        save_priority_editor,
+        toggle_program,
+        university_from_message,
+    )
+
+    callback_id = callback_query["id"]
+    data = callback_query.get("data") or ""
+    message = callback_query.get("message") or {}
+    chat = message.get("chat") or {}
+    chat_id = chat.get("id")
+    message_id = message.get("message_id")
+    if chat_id is None or message_id is None:
+        return
+
+    chat_id = int(chat_id)
+    message_id = int(message_id)
+
+    if not is_allowed(config, chat_id):
+        answer_callback_query(config.bot_token, callback_id, text="Нет доступа")
+        return
+
+    if not data.startswith("prio:"):
+        return
+
+    message_text = message.get("text") or ""
+    university = university_from_message(message_text)
+    state = load_priority_editor(chat_id, university=university)
+    action = data.split(":", 2)
+
+    if len(action) < 2:
+        answer_callback_query(config.bot_token, callback_id)
+        return
+
+    op = action[1]
+    toast: str | None = None
+
+    if op == "edit":
+        save_priority_editor(chat_id, state)
+        edit_message_text(
+            config.bot_token,
+            chat_id,
+            message_id,
+            format_priority_view(state, editing=True),
+            reply_markup=build_priority_keyboard(state),
+        )
+        answer_callback_query(config.bot_token, callback_id)
+        return
+
+    if op in {"tog", "up", "dn"} and len(action) == 3:
+        try:
+            program_id = int(action[2])
+        except ValueError:
+            answer_callback_query(config.bot_token, callback_id, text="Ошибка")
+            return
+        if op == "tog":
+            toggle_program(state, program_id)
+            toast = "Обновлено"
+        elif op == "up":
+            toast = "Выше" if move_program(state, program_id, "up") else "Уже первый"
+        elif op == "dn":
+            toast = "Ниже" if move_program(state, program_id, "down") else "Уже последний"
+        save_priority_editor(chat_id, state)
+        edit_message_text(
+            config.bot_token,
+            chat_id,
+            message_id,
+            format_priority_view(state, editing=True),
+            reply_markup=build_priority_keyboard(state),
+        )
+        answer_callback_query(config.bot_token, callback_id, text=toast)
+        return
+
+    if op == "save":
+        if not state.priority_ids:
+            answer_callback_query(config.bot_token, callback_id, text="Выберите хотя бы одну программу")
+            return
+        save_priority_ids(state.university, state.priority_ids)
+        clear_priority_session(chat_id, state.university)
+        from src.robot.telegram_priorities import build_priority_view_keyboard
+
+        edit_message_text(
+            config.bot_token,
+            chat_id,
+            message_id,
+            format_saved_confirmation(state),
+            reply_markup=build_priority_view_keyboard(),
+        )
+        answer_callback_query(config.bot_token, callback_id, text="Сохранено")
+        return
+
+    if op == "cancel":
+        clear_priority_session(chat_id, state.university)
+        state = load_priority_editor(chat_id, university=state.university)
+        from src.robot.telegram_priorities import build_priority_view_keyboard
+
+        edit_message_text(
+            config.bot_token,
+            chat_id,
+            message_id,
+            format_priority_view(state, editing=False),
+            reply_markup=build_priority_view_keyboard(),
+        )
+        answer_callback_query(config.bot_token, callback_id, text="Отменено")
+        return
+
+    answer_callback_query(config.bot_token, callback_id)
 
 
 def _handle_callback(config, callback_query: dict) -> None:
@@ -66,6 +249,10 @@ def _handle_callback(config, callback_query: dict) -> None:
 
     if not is_allowed(config, chat_id):
         answer_callback_query(config.bot_token, callback_id, text="Нет доступа")
+        return
+
+    if data.startswith("prio:"):
+        _handle_priority_callback(config, callback_query)
         return
 
     if data == "menu:back":
@@ -124,6 +311,148 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             send_message(config.bot_token, chat_id, "Данных пока нет. Запустите /обновить.", reply_to=message_id)
             return
         send_status(results, chat_id)
+        return
+
+    if command in {"/робот", "/robot"}:
+        parts = text.strip().split()
+        try:
+            from src.robot.format import format_robot_cache_refresh, format_robot_result
+            from src.robot.priorities import get_saved_priority_ids
+            from src.robot.simulator import run_robot_simulation
+            from src.robot.universities import SUPPORTED_UNIVERSITIES, fetch_university_pool, parse_robot_command
+
+            action, target = parse_robot_command(parts)
+
+            if action == "refresh":
+                universities = target if isinstance(target, list) else [target]
+                unknown = [name for name in universities if name not in SUPPORTED_UNIVERSITIES]
+                if unknown:
+                    send_message(
+                        config.bot_token,
+                        chat_id,
+                        f"Робот не поддерживает: {', '.join(unknown)}",
+                        reply_to=message_id,
+                    )
+                    return
+
+                if len(universities) > 1:
+                    send_message(
+                        config.bot_token,
+                        chat_id,
+                        "Обновляю кэш робота…",
+                        reply_to=message_id,
+                    )
+                else:
+                    send_message(
+                        config.bot_token,
+                        chat_id,
+                        f"Обновляю кэш робота для {universities[0]}… Это может занять 1–3 минуты.",
+                        reply_to=message_id,
+                    )
+
+                messages: list[str] = []
+                for university in universities:
+                    parser_name = SUPPORTED_UNIVERSITIES[university]
+                    try:
+                        people, programs, fetched_at, _ = fetch_university_pool(parser_name, use_cache=False)
+                    except ValueError as exc:
+                        messages.append(f"⚠️ {university}: {exc}")
+                        continue
+                    messages.append(
+                        format_robot_cache_refresh(
+                            university,
+                            fetched_at=fetched_at,
+                            people_count=len(people),
+                            programs_count=len(programs),
+                        )
+                    )
+                send_message(config.bot_token, chat_id, "\n\n".join(messages), reply_to=message_id)
+                return
+
+            university = target if isinstance(target, str) else "МИРЭА"
+            if SUPPORTED_UNIVERSITIES.get(university) is None:
+                send_message(
+                    config.bot_token,
+                    chat_id,
+                    f"Робот не поддерживает «{university}». Доступно: {', '.join(sorted(SUPPORTED_UNIVERSITIES))}",
+                    reply_to=message_id,
+                )
+                return
+
+            if not get_saved_priority_ids(university):
+                send_message(
+                    config.bot_token,
+                    chat_id,
+                    f"Сначала задайте приоритеты: /приоритет {university}",
+                    reply_to=message_id,
+                )
+                return
+
+            send_message(
+                config.bot_token,
+                chat_id,
+                f"Запускаю симуляцию робота для {university}…\nЗагружаю списки, это может занять 1–3 минуты.",
+                reply_to=message_id,
+            )
+            result = run_robot_simulation(university, use_cache=True)
+            send_message(config.bot_token, chat_id, format_robot_result(result), reply_to=message_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Robot simulation failed: %s", exc)
+            send_message(config.bot_token, chat_id, f"Ошибка симуляции робота:\n{exc}", reply_to=message_id)
+        return
+
+    if command in {"/приоритет", "/приоритеты", "/priority"}:
+        parts = text.strip().split()
+        try:
+            from src.robot.priorities import save_priority_ids
+            from src.robot.telegram_priorities import (
+                PriorityEditorState,
+                format_saved_confirmation,
+                load_priority_editor,
+                try_parse_priority_command,
+            )
+            from src.robot.universities import SUPPORTED_UNIVERSITIES, parse_university_arg
+
+            university = parse_university_arg(parts, default="МИРЭА") or "МИРЭА"
+            if SUPPORTED_UNIVERSITIES.get(university) is None:
+                send_message(
+                    config.bot_token,
+                    chat_id,
+                    f"Робот не поддерживает «{university}». Доступно: {', '.join(sorted(SUPPORTED_UNIVERSITIES))}",
+                    reply_to=message_id,
+                )
+                return
+
+            parsed = try_parse_priority_command(
+                text,
+                default_university=university,
+                supported_universities=set(SUPPORTED_UNIVERSITIES),
+            )
+            if parsed is not None:
+                parsed_university, priority_ids = parsed
+                if priority_ids:
+                    save_priority_ids(parsed_university, priority_ids)
+                    state = load_priority_editor(chat_id, university=parsed_university)
+                    saved_state = PriorityEditorState(
+                        university=parsed_university,
+                        parser=state.parser,
+                        priority_ids=priority_ids,
+                        options=state.options,
+                    )
+                    send_message(
+                        config.bot_token,
+                        chat_id,
+                        format_saved_confirmation(saved_state),
+                        reply_to=message_id,
+                    )
+                    return
+
+            _send_priority_view(config, chat_id, university, reply_to=message_id)
+        except ValueError as exc:
+            send_message(config.bot_token, chat_id, f"Ошибка приоритетов: {exc}", reply_to=message_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Priority editor failed: %s", exc)
+            send_message(config.bot_token, chat_id, f"Ошибка: {exc}", reply_to=message_id)
         return
 
     if command in {"/обновить", "/update"}:

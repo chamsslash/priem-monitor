@@ -45,6 +45,24 @@ def send_message(
     _call(token, "sendMessage", payload)
 
 
+def edit_message_text(
+    token: str,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup: dict[str, Any] | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+    if reply_markup is not None:
+        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+    _call(token, "editMessageText", payload)
+
+
 def answer_callback_query(token: str, callback_query_id: str, text: str | None = None) -> None:
     payload: dict[str, Any] = {"callback_query_id": callback_query_id}
     if text:
