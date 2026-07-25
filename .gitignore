@@ -5,6 +5,5 @@ __pycache__/
 .env
 .env.*
 config/telegram.json
-config/robot.json
 data/cache/
 data/previous_results.json
