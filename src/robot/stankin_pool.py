@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from urllib.parse import urljoin
 
 import requests
@@ -141,4 +142,11 @@ def fetch_direction_rows(direction: str) -> list[dict]:
         if not href:
             break
         response = _get(urljoin(response.url, href))
+    else:
+        print(
+            f"ВНИМАНИЕ: пагинация СТАНКИНа для направления {direction!r} "
+            f"не завершилась естественно за MAX_PAGES={MAX_PAGES} страниц — "
+            "список мог быть обрезан.",
+            file=sys.stderr,
+        )
     return rows
