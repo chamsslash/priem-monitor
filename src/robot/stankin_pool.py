@@ -150,3 +150,28 @@ def fetch_direction_rows(direction: str) -> list[dict]:
             file=sys.stderr,
         )
     return rows
+
+
+_PLACES_RE = re.compile(r"(\d+)\s+бюджетных мест")
+
+
+def _direction_code(direction: str) -> str:
+    return direction.split(" ", 1)[0]
+
+
+def _nap_budget_places(direction_code: str) -> int | None:
+    try:
+        response = _get(NAP_URL_TEMPLATE.format(code=direction_code))
+    except requests.RequestException:
+        return None
+    match = _PLACES_RE.search(response.text)
+    return int(match.group(1)) if match else None
+
+
+def fetch_kcp_places(catalog: list[str]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for direction in catalog:
+        places = _nap_budget_places(_direction_code(direction))
+        if places is not None:
+            result[direction] = places
+    return result
