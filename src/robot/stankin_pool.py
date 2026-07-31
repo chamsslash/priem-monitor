@@ -6,6 +6,8 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from ..parsers.utils import header_index, normalize_yes, to_int
+
 CATALOG_PAGE_URL = "https://priem.stankin.ru/bakalavriatispetsialitet/ranked-lists/"
 LIST_URL = "https://priem.stankin.ru/gridspisokpostupayushchikh"
 NAP_URL_TEMPLATE = "https://priem.stankin.ru/bakalavriatispetsialitet/nap/{code}/"
@@ -84,3 +86,59 @@ def fetch_catalog() -> list[str]:
     except requests.RequestException:
         pass
     return list(FALLBACK_CATALOG)
+
+
+MAX_PAGES = 50  # защита от зацикливания, реальных страниц обычно 1-2
+
+
+def _rows_from_table(soup: BeautifulSoup) -> list[dict]:
+    table = soup.find("table")
+    if table is None:
+        return []
+    rows = table.find_all("tr")
+    if not rows:
+        return []
+
+    headers = [c.get_text(" ", strip=True) for c in rows[0].find_all(["td", "th"])]
+    code_idx = header_index(headers, "уникальный код")
+    score_idx = header_index(headers, "сумма баллов с ид")
+    consent_idx = header_index(headers, "согласие на зачисление")
+    priority_idx = header_index(headers, "приоритет")
+    if None in (code_idx, score_idx, consent_idx, priority_idx):
+        raise ValueError("Не удалось определить колонки списка СТАНКИНа")
+
+    result: list[dict] = []
+    for row in rows[1:]:
+        cells = [c.get_text(" ", strip=True) for c in row.find_all(["td", "th"])]
+        if len(cells) <= max(code_idx, score_idx, consent_idx, priority_idx):
+            continue
+        score = to_int(cells[score_idx])
+        if not score or score <= 0:
+            continue
+        code = cells[code_idx].strip()
+        if not code:
+            continue
+        result.append(
+            {
+                "code": code,
+                "score": score,
+                "consent": normalize_yes(cells[consent_idx]),
+                "priority": to_int(cells[priority_idx]) or 99,
+            }
+        )
+    return result
+
+
+def fetch_direction_rows(direction: str) -> list[dict]:
+    rows: list[dict] = []
+    response = _get(LIST_URL, params={**BASE_PARAMS, "PROPERTY_394": direction})
+    for _ in range(MAX_PAGES):
+        soup = BeautifulSoup(response.text, "lxml")
+        rows.extend(_rows_from_table(soup))
+
+        next_link = soup.find("a", class_="main-ui-pagination-next")
+        href = next_link.get("href") if next_link else None
+        if not href:
+            break
+        response = _get(urljoin(response.url, href))
+    return rows
