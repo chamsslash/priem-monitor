@@ -15,6 +15,7 @@
     },
     "МЭИ": {
       "enabled": true,
+      "dima_list_code": "1824102",
       "dima_priorities": [7, 22, 23, 35, 45]
     },
     "МИРЭА": {

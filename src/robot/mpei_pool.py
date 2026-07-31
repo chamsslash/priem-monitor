@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
 
+from ..config_loader import load_programs
+from ..models import ProgramConfig
 from ..parsers.utils import header_index, normalize_yes, to_int
+from .models import ProgramChoice, RobotPerson, RobotProgram
 
 CATALOG_URL = "https://pk.mpei.ru/info/entrants_list"
 KCP_URL = "https://pk.mpei.ru/info/speclist_simple.html"
@@ -17,6 +25,12 @@ _LIST_ID_RE = re.compile(r"entrants_list\d+\.html")
 
 FETCH_RETRIES = 3
 RETRYABLE_STATUS = {500, 502, 503, 504}
+
+POOL_SCOPE = "full"
+MIN_CATALOG_PROGRAMS = 30
+CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "cache" / "mpei_robot_pool.json"
+CACHE_TTL_SEC = 7200
+MAX_WORKERS = 6
 
 
 def _extract_list_id(text: str) -> str | None:
@@ -186,3 +200,133 @@ def _rows_from_page(html: str) -> list[dict]:
 def fetch_list_rows(list_id: str) -> list[dict]:
     html = _get(urljoin(CATALOG_URL, list_id))
     return _rows_from_page(html)
+
+
+def tracked_programs() -> list[ProgramConfig]:
+    return [p for p in load_programs() if p.university == "МЭИ" and p.parser == "mpei"]
+
+
+def _tracked_by_list_id() -> dict[str, ProgramConfig]:
+    mapping: dict[str, ProgramConfig] = {}
+    for program in tracked_programs():
+        list_id = _extract_list_id(program.list_url)
+        if list_id:
+            mapping[list_id] = program
+    return mapping
+
+
+class MpeiFullPool:
+    def build(self, *, use_cache: bool = True) -> tuple[list[RobotPerson], list[RobotProgram], str, bool]:
+        if use_cache:
+            cached = self._load_cache()
+            if cached is not None:
+                return cached
+        try:
+            catalog = fetch_catalog()
+            kcp_places = self._safe_kcp_places()
+            people, programs = self._fetch_all(catalog, kcp_places)
+            fetched_at = datetime.now(timezone.utc).isoformat()
+            self._save_cache(people, programs, fetched_at)
+            return people, programs, fetched_at, False
+        except Exception:
+            stale = self._load_cache(ignore_ttl=True)
+            if stale is not None:
+                return stale
+            raise
+
+    @staticmethod
+    def _safe_kcp_places() -> dict[str, int]:
+        try:
+            return fetch_kcp_places()
+        except Exception:
+            return {}
+
+    def _fetch_all(
+        self, catalog: list[tuple[str, str]], kcp_places: dict[str, int]
+    ) -> tuple[list[RobotPerson], list[RobotProgram]]:
+        raw_programs: list[RobotProgram] = []
+        rows_by_list: dict[str, list[dict]] = {}
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {executor.submit(fetch_list_rows, list_id): (title, list_id) for title, list_id in catalog}
+            for future in as_completed(futures):
+                title, list_id = futures[future]
+                rows_by_list[list_id] = future.result()
+
+        tracked = _tracked_by_list_id()
+        people: dict[str, RobotPerson] = {}
+        for title, list_id in catalog:
+            tracked_program = tracked.get(list_id)
+            key = str(tracked_program.id) if tracked_program else list_id
+            places = kcp_places.get(title)
+            if places is None:
+                places = tracked_program.budget_places if tracked_program else DEFAULT_BUDGET_PLACES
+            raw_programs.append(
+                RobotProgram(
+                    key=key,
+                    title=title,
+                    budget_places=places,
+                    tracked_id=tracked_program.id if tracked_program else None,
+                )
+            )
+            for row in rows_by_list.get(list_id, []):
+                choice = ProgramChoice(program_key=key, priority=row["priority"])
+                person = people.get(row["code"])
+                if person is None:
+                    people[row["code"]] = RobotPerson(
+                        code=row["code"], score=row["score"], consent=row["consent"], choices=[choice]
+                    )
+                    continue
+                person.score = max(person.score, row["score"])
+                person.consent = person.consent or row["consent"]
+                person.choices.append(choice)
+        return list(people.values()), raw_programs
+
+    def _load_cache(self, *, ignore_ttl: bool = False):
+        if not CACHE_PATH.exists():
+            return None
+        try:
+            payload = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+            fetched_at = payload.get("fetched_at", "")
+            fetched_dt = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+            age = (datetime.now(timezone.utc) - fetched_dt).total_seconds()
+            if not ignore_ttl and age > CACHE_TTL_SEC:
+                return None
+            people = [
+                RobotPerson(
+                    code=item["code"],
+                    score=int(item["score"]),
+                    consent=bool(item["consent"]),
+                    is_bvi=bool(item.get("is_bvi")),
+                    choices=[ProgramChoice(**choice) for choice in item.get("choices", [])],
+                )
+                for item in payload.get("people", [])
+            ]
+            programs = [RobotProgram(**item) for item in payload.get("programs", [])]
+            if payload.get("pool_scope") != POOL_SCOPE or len(programs) < MIN_CATALOG_PROGRAMS:
+                return None
+            return people, programs, fetched_at, True
+        except (ValueError, KeyError, json.JSONDecodeError, TypeError):
+            return None
+
+    def _save_cache(self, people: list[RobotPerson], programs: list[RobotProgram], fetched_at: str) -> None:
+        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "fetched_at": fetched_at,
+            "pool_scope": POOL_SCOPE,
+            "people": [
+                {
+                    "code": p.code,
+                    "score": p.score,
+                    "consent": p.consent,
+                    "is_bvi": p.is_bvi,
+                    "choices": [asdict(c) for c in p.choices],
+                }
+                for p in people
+            ],
+            "programs": [asdict(p) for p in programs],
+        }
+        CACHE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def fetch_mpei_full_pool(*, use_cache: bool = True) -> tuple[list[RobotPerson], list[RobotProgram], str, bool]:
+    return MpeiFullPool().build(use_cache=use_cache)
