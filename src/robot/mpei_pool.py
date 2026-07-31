@@ -77,3 +77,56 @@ def _get(url: str) -> str:
 def fetch_catalog() -> list[tuple[str, str]]:
     html = _get(CATALOG_URL)
     return _catalog_from_page(html)
+
+
+DEFAULT_BUDGET_PLACES = 30
+
+
+def _kcp_from_page(html: str) -> dict[str, int]:
+    """Официальные КЦП (очная форма) по названию конкурсной группы.
+
+    Таблица `kcp-table`: у многопрофильных групп название стоит только
+    в первой строке (rowspan), у следующих строк той же группы — нет,
+    поэтому название запоминается и используется для всех строк подряд,
+    пока не встретится следующее название. Число мест — первая числовая
+    ячейка после текстовых (это колонка «Всего» из группы «В рамках
+    контрольных цифр приёма» — первая по порядку числовая колонка).
+    """
+    soup = BeautifulSoup(html, "lxml")
+    table = soup.find("table", class_="kcp-table")
+    if table is None:
+        raise ValueError("Не найдена таблица kcp-table")
+
+    result: dict[str, int] = {}
+    current_title: str | None = None
+    in_daytime_section = False
+    for row in table.find_all("tr"):
+        cells = row.find_all("td")
+        if not cells:
+            continue
+        text0 = cells[0].get_text(" ", strip=True)
+
+        if text0 == "Очная форма обучения":
+            in_daytime_section = True
+            continue
+        if text0 in ("Очно-заочная форма обучения", "Заочная форма обучения"):
+            break
+        if not in_daytime_section:
+            continue
+
+        if not text0.isdigit():
+            current_title = text0
+        if current_title is None:
+            continue
+
+        numbers = [c.get_text(strip=True) for c in cells if c.get_text(strip=True).isdigit()]
+        if numbers:
+            result.setdefault(current_title, int(numbers[0]))
+    if not result:
+        raise ValueError("Не удалось извлечь КЦП из kcp-table")
+    return result
+
+
+def fetch_kcp_places() -> dict[str, int]:
+    html = _get(KCP_URL)
+    return _kcp_from_page(html)
