@@ -252,6 +252,20 @@ class StankinFullPool:
             canonical = min(configs, key=lambda p: p.id)
             tracked_key_by_direction[direction] = (str(canonical.id), canonical.id)
 
+        catalog_set = set(catalog)
+        for direction, configs in direction_groups.items():
+            if direction not in catalog_set:
+                ids = sorted(p.id for p in configs)
+                print(
+                    f"ВНИМАНИЕ: отслеживаемое направление СТАНКИНа {direction!r} "
+                    f"(id {ids}, ключ пула {tracked_key_by_direction[direction][0]!r}) "
+                    "не найдено среди реальных направлений каталога сайта — оно не "
+                    "попадёт в пул, и приоритеты Димы на него тихо выпадут из "
+                    "симуляции (возможно, сайт переименовал или убрал эту строку "
+                    "каталога).",
+                    file=sys.stderr,
+                )
+
         programs: list[RobotProgram] = []
         people: dict[str, RobotPerson] = {}
         for direction in catalog:
@@ -264,6 +278,17 @@ class StankinFullPool:
                 if tracked_key:
                     configs = direction_groups[direction]
                     places = sum(p.budget_places for p in configs)
+                    if len(configs) > 1:
+                        breakdown = "+".join(
+                            str(p.budget_places) for p in sorted(configs, key=lambda p: p.id)
+                        )
+                        print(
+                            f"ВНИМАНИЕ: для смёрженной пары СТАНКИНа {direction!r} "
+                            f"(ключ {key!r}) официальный КЦП не найден — используется "
+                            f"fallback-сумма квот профилей из конфига {breakdown}={places}, "
+                            "которая может завышать реальное общее число бюджетных мест.",
+                            file=sys.stderr,
+                        )
                 else:
                     places = DEFAULT_BUDGET_PLACES
 
