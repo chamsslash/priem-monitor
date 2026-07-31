@@ -6,6 +6,8 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from ..parsers.utils import header_index, normalize_yes, to_int
+
 CATALOG_URL = "https://pk.mpei.ru/info/entrants_list"
 KCP_URL = "https://pk.mpei.ru/info/speclist_simple.html"
 
@@ -130,3 +132,57 @@ def _kcp_from_page(html: str) -> dict[str, int]:
 def fetch_kcp_places() -> dict[str, int]:
     html = _get(KCP_URL)
     return _kcp_from_page(html)
+
+
+def _expand_row_cells(row) -> list[str]:
+    cells: list[str] = []
+    for cell in row.find_all(["td", "th"]):
+        text = cell.get_text(" ", strip=True)
+        span = int(cell.get("colspan") or 1)
+        cells.extend([text] * span)
+    return cells
+
+
+def _rows_from_page(html: str) -> list[dict]:
+    soup = BeautifulSoup(html, "lxml")
+    tables = soup.find_all("table")
+    if not tables:
+        raise ValueError("Таблица конкурсного списка не найдена")
+    table = max(tables, key=lambda item: len(item.find_all("tr")))
+    rows = table.find_all("tr")
+    if len(rows) < 3:
+        raise ValueError("Таблица конкурсного списка пуста")
+
+    headers = _expand_row_cells(rows[0])
+    code_idx = header_index(headers, "уникальный код")
+    score_idx = header_index(headers, "сумма")
+    consent_idx = header_index(headers, "согласие")
+    priority_idx = header_index(headers, "приоритет")
+    if None in (code_idx, score_idx, consent_idx, priority_idx):
+        raise ValueError("Не удалось определить колонки таблицы МЭИ")
+
+    result: list[dict] = []
+    for row in rows[2:]:
+        cells = _expand_row_cells(row)
+        if len(cells) <= max(code_idx, score_idx, consent_idx, priority_idx):
+            continue
+        score = to_int(cells[score_idx])
+        if not score or score <= 0:
+            continue
+        code = cells[code_idx].strip()
+        if not code:
+            continue
+        result.append(
+            {
+                "code": code,
+                "score": score,
+                "consent": normalize_yes(cells[consent_idx]),
+                "priority": to_int(cells[priority_idx]) or 99,
+            }
+        )
+    return result
+
+
+def fetch_list_rows(list_id: str) -> list[dict]:
+    html = _get(urljoin(CATALOG_URL, list_id))
+    return _rows_from_page(html)
