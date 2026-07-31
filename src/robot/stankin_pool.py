@@ -88,7 +88,7 @@ def fetch_catalog() -> list[str]:
     return list(FALLBACK_CATALOG)
 
 
-MAX_PAGES = 50  # защита от зацикливания, реальных страниц обычно 1-2
+MAX_PAGES = 300  # запас: живьём на 09.03.04 список доходил до 61 страницы (2967 строк), взят кратный запас
 
 
 def _rows_from_table(soup: BeautifulSoup) -> list[dict]:
