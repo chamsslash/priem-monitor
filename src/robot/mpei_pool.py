@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -250,7 +251,16 @@ class MpeiFullPool:
             futures = {executor.submit(fetch_list_rows, list_id): (title, list_id) for title, list_id in catalog}
             for future in as_completed(futures):
                 title, list_id = futures[future]
-                rows_by_list[list_id] = future.result()
+                try:
+                    rows_by_list[list_id] = future.result()
+                except Exception as exc:
+                    print(
+                        f"ВНИМАНИЕ: не удалось загрузить конкурсный список МЭИ {title!r} "
+                        f"({list_id}) после исчерпания ретраев ({exc}) — направление "
+                        "попадёт в пул с пустым списком абитуриентов (места и заголовок "
+                        "сохранятся, но конкурс по нему не будет учтён в этом цикле сборки).",
+                        file=sys.stderr,
+                    )
 
         tracked = _tracked_by_list_id()
         people: dict[str, RobotPerson] = {}

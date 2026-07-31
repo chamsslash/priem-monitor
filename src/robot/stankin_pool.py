@@ -243,7 +243,18 @@ class StankinFullPool:
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {executor.submit(fetch_direction_rows, direction): direction for direction in catalog}
             for future in as_completed(futures):
-                rows_by_direction[futures[future]] = future.result()
+                direction = futures[future]
+                try:
+                    rows_by_direction[direction] = future.result()
+                except Exception as exc:
+                    print(
+                        f"ВНИМАНИЕ: не удалось загрузить конкурсный список СТАНКИНа по "
+                        f"направлению {direction!r} после исчерпания ретраев ({exc}) — "
+                        "направление попадёт в пул с пустым списком абитуриентов (места "
+                        "и заголовок сохранятся, но конкурс по нему не будет учтён в "
+                        "этом цикле сборки).",
+                        file=sys.stderr,
+                    )
 
         direction_groups = _tracked_direction_groups()
         # направление -> (ключ в пуле, tracked_id) для отслеживаемых направлений
