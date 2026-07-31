@@ -192,6 +192,11 @@ CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "cache" / "stankin_r
 CACHE_TTL_SEC = 7200
 MAX_WORKERS = 6
 DEFAULT_BUDGET_PLACES = 30
+# Доля упавших списков, после которой сбой считается массовым/системным
+# (троттлинг, авария сайта), а не единичным сетевым сбоем одного списка —
+# при превышении _fetch_all бросает исключение, чтобы build() откатился
+# на устаревший кэш вместо сохранения почти пустого датасета.
+MAX_FAILED_FRACTION = 0.5
 
 
 def tracked_programs() -> list[ProgramConfig]:
@@ -240,6 +245,7 @@ class StankinFullPool:
         self, catalog: list[str], kcp_places: dict[str, int]
     ) -> tuple[list[RobotPerson], list[RobotProgram]]:
         rows_by_direction: dict[str, list[dict]] = {}
+        failed_directions: list[str] = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {executor.submit(fetch_direction_rows, direction): direction for direction in catalog}
             for future in as_completed(futures):
@@ -247,6 +253,7 @@ class StankinFullPool:
                 try:
                     rows_by_direction[direction] = future.result()
                 except Exception as exc:
+                    failed_directions.append(direction)
                     print(
                         f"ВНИМАНИЕ: не удалось загрузить конкурсный список СТАНКИНа по "
                         f"направлению {direction!r} после исчерпания ретраев ({exc}) — "
@@ -255,6 +262,16 @@ class StankinFullPool:
                         "этом цикле сборки).",
                         file=sys.stderr,
                     )
+
+        if catalog and len(failed_directions) / len(catalog) > MAX_FAILED_FRACTION:
+            raise RuntimeError(
+                f"Массовый сбой загрузки конкурсных списков СТАНКИНа: не удалось загрузить "
+                f"{len(failed_directions)} из {len(catalog)} "
+                f"({len(failed_directions) / len(catalog):.0%}) — превышен порог "
+                f"{MAX_FAILED_FRACTION:.0%}, похоже на системный сбой (троттлинг или "
+                "недоступность сайта), а не единичный сетевой сбой одного списка. Сборка "
+                "пула прервана, чтобы не перезаписать кэш почти пустым датасетом."
+            )
 
         direction_groups = _tracked_direction_groups()
         # направление -> (ключ в пуле, tracked_id) для отслеживаемых направлений

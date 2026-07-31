@@ -32,6 +32,11 @@ MIN_CATALOG_PROGRAMS = 30
 CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "cache" / "mpei_robot_pool.json"
 CACHE_TTL_SEC = 7200
 MAX_WORKERS = 6
+# Доля упавших списков, после которой сбой считается массовым/системным
+# (троттлинг, авария сайта), а не единичным сетевым сбоем одного списка —
+# при превышении _fetch_all бросает исключение, чтобы build() откатился
+# на устаревший кэш вместо сохранения почти пустого датасета.
+MAX_FAILED_FRACTION = 0.5
 
 
 def _extract_list_id(text: str) -> str | None:
@@ -247,6 +252,7 @@ class MpeiFullPool:
     ) -> tuple[list[RobotPerson], list[RobotProgram]]:
         raw_programs: list[RobotProgram] = []
         rows_by_list: dict[str, list[dict]] = {}
+        failed_lists: list[str] = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {executor.submit(fetch_list_rows, list_id): (title, list_id) for title, list_id in catalog}
             for future in as_completed(futures):
@@ -254,6 +260,7 @@ class MpeiFullPool:
                 try:
                     rows_by_list[list_id] = future.result()
                 except Exception as exc:
+                    failed_lists.append(list_id)
                     print(
                         f"ВНИМАНИЕ: не удалось загрузить конкурсный список МЭИ {title!r} "
                         f"({list_id}) после исчерпания ретраев ({exc}) — направление "
@@ -261,6 +268,15 @@ class MpeiFullPool:
                         "сохранятся, но конкурс по нему не будет учтён в этом цикле сборки).",
                         file=sys.stderr,
                     )
+
+        if catalog and len(failed_lists) / len(catalog) > MAX_FAILED_FRACTION:
+            raise RuntimeError(
+                f"Массовый сбой загрузки конкурсных списков МЭИ: не удалось загрузить "
+                f"{len(failed_lists)} из {len(catalog)} ({len(failed_lists) / len(catalog):.0%}) — "
+                f"превышен порог {MAX_FAILED_FRACTION:.0%}, похоже на системный сбой "
+                "(троттлинг или недоступность сайта), а не единичный сетевой сбой одного "
+                "списка. Сборка пула прервана, чтобы не перезаписать кэш почти пустым датасетом."
+            )
 
         tracked = _tracked_by_list_id()
         people: dict[str, RobotPerson] = {}
