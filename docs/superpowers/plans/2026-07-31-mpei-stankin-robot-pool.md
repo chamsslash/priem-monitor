@@ -1327,6 +1327,96 @@ git commit -m "Собрать полный пул робота для СТАНК
 
 ---
 
+## Task 10: Финальная сквозная проверка — реальный предикт Димы по всем вузам робота
+
+Добавлена по прямому запросу пользователя в ходе выполнения плана: после того
+как МЭИ и СТАНКИН заработают (Task 1-9), нужна не точечная, а сквозная живая
+проверка ВСЕХ вузов, для которых робот реализован (включая уже существовавшие
+до этого плана Финуниверситет и МИРЭА) — что для каждого Дима действительно
+находится в реальном пуле по своему захардкоженному `dima_list_code` (а не
+подменяется синтетическим участником из конфига), и что из симуляции реально
+получается предикт (куда зачислен/не зачислен, по какому приоритету, сколько
+мест остаётся на момент его хода по каждому приоритету).
+
+Технически: `_resolve_dima_person()` (`src/robot/simulator.py:127-147`) ищет
+Диму в живом пуле по `dima_list_code` через `_find_dima_in_pool()` — если для
+вуза задан `dima_list_code`, но код не находится среди реальных участников,
+функция бросает `ValueError`, которая всплывает как `result.error` из
+`run_robot_simulation()`. То есть `result.error is None` для вуза с заданным
+`dima_list_code` уже само по себе доказывает, что Дима найден по-настоящему
+(не синтетика) — отдельно проверять внутренний флаг `dima_in_pool` не нужно,
+он не выведен наружу в `RobotSimulationResult` и проверять его нужды нет.
+
+**Files:**
+- Не создаёт и не меняет код — только живая проверка поверх уже реализованного
+  (Task 1-9) и ранее существовавшего (МИРЭА/ФА) кода.
+
+**Interfaces:**
+- Consumes: `robot_ready_universities()`, `run_robot_simulation()` из
+  `src/robot/universities.py` / `src/robot/simulator.py` (без изменений)
+
+- [ ] **Step 1: Прогнать симуляцию по каждому готовому вузу и собрать предикт**
+
+```bash
+cd /Users/gyattalert/work/priem-monitor
+python3 - <<'EOF'
+import sys
+sys.path.insert(0, ".")
+from src.robot.universities import robot_ready_universities
+from src.robot.simulator import run_robot_simulation
+from src.robot.priorities import get_saved_priority_ids
+
+ready = robot_ready_universities()
+print("Вузы с реализованным роботом:", ready)
+assert set(ready) >= {"Финансовый университет", "МИРЭА", "МЭИ", "СТАНКИН"}, \
+    f"ожидали минимум эти 4 вуза, получили {ready}"
+
+results = {}
+for university in ready:
+    result = run_robot_simulation(university, use_cache=False)
+    results[university] = result
+    print(f"\n=== {university} ===")
+    print("ошибка:", result.error)
+    assert result.error is None, f"{university}: {result.error}"
+
+    print("Дима — код:", result.dima_code, "балл:", result.dima_score)
+    print("всего участников в конкурсе:", result.total_people, "направлений:", result.directions_total)
+    print("зачислен на:", result.dima_placed_title, "| по приоритету:", result.dima_priority_used,
+          "| механизм:", result.dima_placed_via)
+    if result.dima_placed_program_key is None:
+        print("предикт: по текущим приоритетам и баллу Дима пока никуда не проходит")
+    print("отслеживаемые направления и остаток мест на момент хода Димы:")
+    for snapshot in result.dima_remaining_at_turn:
+        status = "МОЖЕТ пройти" if snapshot.can_enter else "мест не осталось"
+        print(f"  [{snapshot.priority}] {snapshot.title}: {snapshot.remaining_at_turn}/{snapshot.budget_places} — {status}")
+
+    saved_priorities = get_saved_priority_ids(university)
+    print("сохранённые приоритеты Димы (config/robot.json):", saved_priorities)
+    assert saved_priorities, f"{university}: не заданы dima_priorities"
+
+print("\nOK — по всем вузам получен реальный предикт без ошибок")
+EOF
+```
+
+Ожидается: для каждого из минимум 4 вузов (Финуниверситет, МИРЭА, МЭИ,
+СТАНКИН) — `result.error is None` (значит Дима найден в реальном пуле по
+`dima_list_code`, не синтетика), выведен статус по каждому отслеживаемому
+приоритету (остаток мест на момент его хода) и итоговый результат (зачислен
+куда-то или пока никуда — оба исхода допустимы, падать не должно только на
+`result.error`).
+
+- [ ] **Step 2: Зафиксировать результат для пользователя**
+
+Скопировать полный вывод Step 1 (по каждому вузу: зачислен/не зачислен,
+остаток мест по приоритетам) в отчёт задачи — это и есть конечный
+пользовательский результат всего плана, финальный ответ на вопрос
+«где сейчас Дима и куда его определит робот по текущим приоритетам».
+
+Коммит не нужен (задача ничего не меняет в репозитории, только проверяет и
+репортит).
+
+---
+
 ## Проверено, но не в объёме этого плана (будущие улучшения)
 
 - Разведать программное включение скрытой колонки «Конкурсная группа» на
