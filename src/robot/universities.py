@@ -7,6 +7,7 @@ from .fa_pool import fetch_fa_full_pool
 from .mirea_pool import fetch_mirea_full_pool
 from .models import RobotPerson, RobotProgram
 from .mpei_pool import fetch_mpei_full_pool
+from .stankin_pool import fetch_stankin_full_pool
 
 PoolFetcher = Callable[..., tuple[list[RobotPerson], list[RobotProgram], str, bool]]
 
@@ -27,6 +28,7 @@ _POOL_FETCHERS: dict[str, PoolFetcher] = {
     "fa": fetch_fa_full_pool,
     "mirea": fetch_mirea_full_pool,
     "mpei": fetch_mpei_full_pool,
+    "stankin": fetch_stankin_full_pool,
 }
 
 
