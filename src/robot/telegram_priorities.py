@@ -47,12 +47,21 @@ def load_priority_editor(
     university: str = DEFAULT_UNIVERSITY,
     parser: str | None = None,
 ) -> PriorityEditorState:
+    from ..telegram_users import robot_config_path
+
     if parser is None:
         from .universities import SUPPORTED_UNIVERSITIES
 
         parser = SUPPORTED_UNIVERSITIES.get(university, DEFAULT_PARSER)
     options = list_university_programs(university, parser)
-    saved = get_saved_priority_ids(university)
+    config_path = robot_config_path(chat_id)
+    # Личного файла может ещё не быть на диске (пользователь не завершил
+    # регистрацию по коду) — в этом случае get_saved_priority_ids ушёл бы
+    # в load_raw_config() и откатился на config/robot.example.json, где
+    # лежат настоящие Димины приоритеты. Читаем сохранённые приоритеты
+    # только если личный файл реально существует, иначе считаем, что
+    # приоритетов пока нет.
+    saved = get_saved_priority_ids(university, path=config_path) if config_path.exists() else []
     available = {option.program_id for option in options}
     session_key = _session_key(chat_id, university)
     priority_ids = _priority_sessions.get(session_key) or [item for item in saved if item in available]
