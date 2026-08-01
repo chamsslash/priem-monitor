@@ -280,6 +280,13 @@ class RanepaParser(BaseParser):
 class FaParser(BaseParser):
     name = "fa"
 
+    FIELD_LABELS = {
+        "program": "Конкурсная группа/образовательная программа",
+        "priority": "Приоритет зачисления, указанный поступающим по данной конкурсной группе",
+        "score": "Сумма конкурсных баллов",
+        "consent": "Наличие согласия на зачисление",
+    }
+
     def _get(self, params: dict) -> str:
         last_error: Exception | None = None
         for attempt in range(FA_FETCH_RETRIES):
@@ -329,23 +336,29 @@ class FaParser(BaseParser):
                 soup = BeautifulSoup(html, "lxml")
                 page_rows = 0
                 for row in soup.select("tbody tr"):
-                    cells = [cell.get_text(" ", strip=True) for cell in row.find_all("td")]
-                    if not cells or not cells[0].isdigit():
+                    cells = row.find_all("td")
+                    if not cells or not cells[0].get_text(strip=True).isdigit():
                         continue
                     page_rows += 1
-                    program_text = cells[3].lower()
+
+                    fields = {(cell.get("data-label") or "").strip(): cell.get_text(" ", strip=True) for cell in cells}
+                    for label in self.FIELD_LABELS.values():
+                        if label not in fields:
+                            raise ValueError(f"На сайте ФА не найдена колонка {label!r} — вёрстка снова изменилась")
+
+                    program_text = fields[self.FIELD_LABELS["program"]].lower()
                     if keywords and not any(word.lower() in program_text for word in keywords):
                         continue
                     if "очно-заоч" in program_text or "dot" in program_text or "дот" in program_text:
                         continue
-                    score = int(to_float(cells[9]) or 0)
+                    score = int(to_float(fields[self.FIELD_LABELS["score"]]) or 0)
                     if score <= 0:
                         continue
                     applicants.append(
                         Applicant(
                             score=score,
-                            consent=normalize_yes(cells[17]),
-                            priority=to_int(cells[4]) or 99,
+                            consent=normalize_yes(fields[self.FIELD_LABELS["consent"]]),
+                            priority=to_int(fields[self.FIELD_LABELS["priority"]]) or 99,
                         )
                     )
 
