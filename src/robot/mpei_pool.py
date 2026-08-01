@@ -110,9 +110,11 @@ def _kcp_from_page(html: str) -> dict[str, int]:
     Таблица `kcp-table`: у многопрофильных групп название стоит только
     в первой строке (rowspan), у следующих строк той же группы — нет,
     поэтому название запоминается и используется для всех строк подряд,
-    пока не встретится следующее название. Число мест — первая числовая
-    ячейка после текстовых (это колонка «Всего» из группы «В рамках
-    контрольных цифр приёма» — первая по порядку числовая колонка).
+    пока не встретится следующее название. Число мест — основные места
+    общего конкурса: колонка «Всего» (`numbers[0]`) за вычетом квот —
+    особой (`numbers[1]`), отдельной (`numbers[2]`) и целевой
+    (`numbers[3]`), т.к. робот моделирует именно общий конкурс по ЕГЭ,
+    без учёта квотных мест.
     """
     soup = BeautifulSoup(html, "lxml")
     table = soup.find("table", class_="kcp-table")
@@ -141,9 +143,11 @@ def _kcp_from_page(html: str) -> dict[str, int]:
         if current_title is None:
             continue
 
-        numbers = [c.get_text(strip=True) for c in cells if c.get_text(strip=True).isdigit()]
-        if numbers:
-            result.setdefault(current_title, int(numbers[0]))
+        numbers = [int(c.get_text(strip=True)) for c in cells if c.get_text(strip=True).isdigit()]
+        if len(numbers) >= 4:
+            osnovnye = numbers[0] - numbers[1] - numbers[2] - numbers[3]
+            if osnovnye > 0:
+                result.setdefault(current_title, osnovnye)
     if not result:
         raise ValueError("Не удалось извлечь КЦП из kcp-table")
     return result
