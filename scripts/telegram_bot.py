@@ -152,6 +152,12 @@ def _handle_priority_callback(config, callback_query: dict) -> None:
     chat_id = int(chat_id)
     message_id = int(message_id)
 
+    from src.telegram_users import is_registered
+
+    if not is_registered(chat_id):
+        answer_callback_query(config.bot_token, callback_id, text="Сначала зарегистрируйтесь")
+        return
+
     if not data.startswith("prio:"):
         return
 
@@ -249,6 +255,12 @@ def _handle_callback(config, callback_query: dict) -> None:
         return
 
     chat_id = int(chat_id)
+
+    from src.telegram_users import is_registered
+
+    if not is_registered(chat_id):
+        answer_callback_query(config.bot_token, callback_id, text="Сначала зарегистрируйтесь")
+        return
 
     if data.startswith("prio:"):
         _handle_priority_callback(config, callback_query)
