@@ -78,6 +78,30 @@ def _help_text() -> str:
     )
 
 
+def _format_multi_status(code: str, results: list) -> str:
+    lines = [f"📊 Статус по коду {code}"]
+    found_any = False
+    for university, result in results:
+        if result.error:
+            continue
+        found_any = True
+        lines.append("")
+        lines.append(f"— {university} —")
+        if result.dima_placed_program_key is None:
+            lines.append("Пока не проходите ни по одному отслеживаемому приоритету.")
+        else:
+            via = "БВИ" if result.dima_placed_via == "bvi" else "общий конкурс"
+            lines.append(f"✅ Зачислитесь: {result.dima_placed_title}")
+            lines.append(f"{result.dima_priority_used}-й приоритет · {via} · балл {result.dima_score}")
+    if not found_any:
+        lines.append("")
+        lines.append("Код не найден ни в одном из 4 вузов (Финуниверситет, МИРЭА, МЭИ, СТАНКИН).")
+        lines.append("Проверьте код через /код <номер>, либо вы подавали в другой вуз.")
+    lines.append("")
+    lines.append("Подробности по одному вузу: /робот <вуз>")
+    return "\n".join(lines)
+
+
 def _send_priority_view(
     config,
     chat_id: int,
@@ -337,12 +361,30 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
         )
         return
 
+    # Старая механика /статус — общий дашборд по всем 10 вузам через
+    # dima_score в config/programs.json. Не удалена, закомментирована:
+    # if command == "/статус":
+    #     results = load_results()
+    #     if not results.get("rows"):
+    #         send_message(config.bot_token, chat_id, "Данных пока нет. Запустите /обновить.", reply_to=message_id)
+    #         return
+    #     send_status(results, chat_id)
+    #     return
+
     if command == "/статус":
-        results = load_results()
-        if not results.get("rows"):
-            send_message(config.bot_token, chat_id, "Данных пока нет. Запустите /обновить.", reply_to=message_id)
-            return
-        send_status(results, chat_id)
+        from src.robot.priorities import get_saved_priority_ids
+        from src.robot.simulator import run_robot_simulation
+        from src.robot.universities import robot_ready_universities
+        from src.telegram_users import build_robot_settings, get_user_code, robot_config_path
+
+        code = get_user_code(chat_id)
+        results = []
+        for university in sorted(robot_ready_universities()):
+            settings = build_robot_settings(code, university)
+            priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
+            result = run_robot_simulation(university, settings=settings, use_cache=True, priority_ids=priority_ids)
+            results.append((university, result))
+        send_message(config.bot_token, chat_id, _format_multi_status(code, results), reply_to=message_id)
         return
 
     if command in {"/робот", "/robot"}:
