@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+from .robot.config import RobotSettings
+
 ROOT = Path(__file__).resolve().parents[1]
 USERS_PATH = ROOT / "data" / "telegram_users.json"
 USER_ROBOT_CONFIG_DIR = ROOT / "data" / "telegram_users"
@@ -62,3 +64,24 @@ def set_user_code(chat_id: int, code: str) -> None:
     data[str(chat_id)] = code
     _save_all(data)
     _ensure_blank_robot_config(chat_id)
+
+
+def build_robot_settings(code: str, university: str) -> RobotSettings:
+    """Личность для симулятора строится на лету из кода пользователя —
+    без обращения к config/robot.json. dima_score/dima_consent здесь не
+    влияют на результат, когда код реально находится в пуле: в этом
+    случае _resolve_dima_person() в simulator.py берёт настоящий балл
+    прямо из пула (found.score), эти поля — только безопасный дефолт для
+    редкой ветки "код не найден" (синтетический участник)."""
+    return RobotSettings(
+        dima_code=code,
+        dima_score=0,
+        dima_consent=True,
+        require_consent=True,
+        universities={
+            university: {
+                "enabled": True,
+                "dima_list_code": code,
+            }
+        },
+    )
