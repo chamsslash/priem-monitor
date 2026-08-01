@@ -7,3 +7,5 @@ __pycache__/
 config/telegram.json
 data/cache/
 data/previous_results.json
+data/telegram_users.json
+data/telegram_users/
