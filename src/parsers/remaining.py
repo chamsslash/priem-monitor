@@ -22,6 +22,9 @@ from .utils import (
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
+FA_FETCH_RETRIES = 3
+FA_RETRYABLE_STATUS = {500, 502, 503, 504}
+
 
 class MiitParser(BaseParser):
     name = "miit"
@@ -277,6 +280,31 @@ class RanepaParser(BaseParser):
 class FaParser(BaseParser):
     name = "fa"
 
+    def _get(self, params: dict) -> str:
+        last_error: Exception | None = None
+        for attempt in range(FA_FETCH_RETRIES):
+            try:
+                response = requests.get(
+                    "https://www.fa.ru/spiski/listabit.php",
+                    params=params,
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=60,
+                )
+                response.raise_for_status()
+                return response.text
+            except requests.HTTPError as exc:
+                last_error = exc
+                status = exc.response.status_code if exc.response is not None else None
+                if status in FA_RETRYABLE_STATUS and attempt < FA_FETCH_RETRIES - 1:
+                    continue
+                break
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < FA_FETCH_RETRIES - 1:
+                    continue
+                break
+        raise last_error or RuntimeError("Не удалось загрузить список Финуниверситета")
+
     def fetch(self, program: ProgramConfig) -> ProgramResult:
         fetched_at = datetime.now(timezone.utc).isoformat()
         try:
@@ -288,18 +316,12 @@ class FaParser(BaseParser):
 
             while True:
                 params = {
-                    "itype_list": "бкл",
                     "facultet": keyword,
                     "type_conkurs": "Общий конкурс",
                     "form_pay": "Бюджет",
                     "page": page,
                 }
-                html = requests.get(
-                    "https://www.fa.ru/spiski/listabit.php",
-                    params=params,
-                    headers={"User-Agent": USER_AGENT},
-                    timeout=60,
-                ).text
+                html = self._get(params)
                 if total is None:
                     match = re.search(r"total:\s*(\d+)", html)
                     total = int(match.group(1)) if match else 0
