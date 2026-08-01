@@ -237,7 +237,9 @@ def _handle_priority_callback(config, callback_query: dict) -> None:
         if not state.priority_ids:
             answer_callback_query(config.bot_token, callback_id, text="Выберите хотя бы одну программу")
             return
-        save_priority_ids(state.university, state.priority_ids)
+        from src.telegram_users import robot_config_path
+
+        save_priority_ids(state.university, state.priority_ids, path=robot_config_path(chat_id))
         clear_priority_session(chat_id, state.university)
         from src.robot.telegram_priorities import build_priority_view_keyboard
 
@@ -290,38 +292,44 @@ def _handle_callback(config, callback_query: dict) -> None:
         _handle_priority_callback(config, callback_query)
         return
 
-    if data == "menu:back":
-        results = load_results()
-        if not results.get("rows"):
-            answer_callback_query(config.bot_token, callback_id, text="Нет данных")
-            return
-        send_status(results, chat_id)
-        answer_callback_query(config.bot_token, callback_id, text="Меню вузов")
-        return
+    # Клавиатура меню старого /статус (menu:back, uni:...) — эти callback'и
+    # больше никогда не придут, т.к. сама клавиатура (build_university_keyboard/
+    # build_back_to_menu_keyboard) с Task 6 не отправляется. Закомментировано,
+    # не удалено — на случай возврата к старой механике.
+    # if data == "menu:back":
+    #     results = load_results()
+    #     if not results.get("rows"):
+    #         answer_callback_query(config.bot_token, callback_id, text="Нет данных")
+    #         return
+    #     send_status(results, chat_id)
+    #     answer_callback_query(config.bot_token, callback_id, text="Меню вузов")
+    #     return
+    #
+    # if not data.startswith("uni:"):
+    #     answer_callback_query(config.bot_token, callback_id)
+    #     return
+    #
+    # try:
+    #     university_index = int(data.split(":", 1)[1])
+    # except ValueError:
+    #     answer_callback_query(config.bot_token, callback_id, text="Некорректный выбор")
+    #     return
+    #
+    # results = load_results()
+    # if not results.get("rows"):
+    #     answer_callback_query(config.bot_token, callback_id, text="Нет данных")
+    #     return
+    #
+    # try:
+    #     university = send_university_report(results, chat_id, university_index)
+    #     answer_callback_query(config.bot_token, callback_id, text=university)
+    # except (ValueError, RuntimeError) as exc:
+    #     answer_callback_query(config.bot_token, callback_id, text=str(exc))
+    # except TelegramAPIError as exc:
+    #     logger.error("Callback failed for chat %s: %s", chat_id, exc)
+    #     answer_callback_query(config.bot_token, callback_id, text="Ошибка отправки")
 
-    if not data.startswith("uni:"):
-        answer_callback_query(config.bot_token, callback_id)
-        return
-
-    try:
-        university_index = int(data.split(":", 1)[1])
-    except ValueError:
-        answer_callback_query(config.bot_token, callback_id, text="Некорректный выбор")
-        return
-
-    results = load_results()
-    if not results.get("rows"):
-        answer_callback_query(config.bot_token, callback_id, text="Нет данных")
-        return
-
-    try:
-        university = send_university_report(results, chat_id, university_index)
-        answer_callback_query(config.bot_token, callback_id, text=university)
-    except (ValueError, RuntimeError) as exc:
-        answer_callback_query(config.bot_token, callback_id, text=str(exc))
-    except TelegramAPIError as exc:
-        logger.error("Callback failed for chat %s: %s", chat_id, exc)
-        answer_callback_query(config.bot_token, callback_id, text="Ошибка отправки")
+    answer_callback_query(config.bot_token, callback_id)
 
 
 def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
@@ -453,13 +461,11 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 )
                 return
 
-            if not get_saved_priority_ids(university):
-                send_message(
-                    config.bot_token,
-                    chat_id,
-                    f"Сначала задайте приоритеты: /приоритет {university}",
-                    reply_to=message_id,
-                )
+            from src.telegram_users import build_robot_settings, get_user_code, robot_config_path
+
+            code = get_user_code(chat_id)
+            if not code:
+                send_message(config.bot_token, chat_id, "Сначала пришлите ваш код поступающего.", reply_to=message_id)
                 return
 
             send_message(
@@ -468,7 +474,9 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 f"Запускаю симуляцию робота для {university}…\nЗагружаю списки, это может занять 1–3 минуты.",
                 reply_to=message_id,
             )
-            result = run_robot_simulation(university, use_cache=True)
+            settings = build_robot_settings(code, university)
+            priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
+            result = run_robot_simulation(university, settings=settings, use_cache=True, priority_ids=priority_ids)
             send_message(config.bot_token, chat_id, format_robot_result(result), reply_to=message_id)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Robot simulation failed: %s", exc)
@@ -497,6 +505,8 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 )
                 return
 
+            from src.telegram_users import robot_config_path
+
             parsed = try_parse_priority_command(
                 text,
                 default_university=university,
@@ -505,7 +515,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             if parsed is not None:
                 parsed_university, priority_ids = parsed
                 if priority_ids:
-                    save_priority_ids(parsed_university, priority_ids)
+                    save_priority_ids(parsed_university, priority_ids, path=robot_config_path(chat_id))
                     state = load_priority_editor(chat_id, university=parsed_university)
                     saved_state = PriorityEditorState(
                         university=parsed_university,
