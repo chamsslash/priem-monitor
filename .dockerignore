@@ -1,0 +1,11 @@
+.git
+.claude
+docs/superpowers
+data/cache
+logs
+__pycache__
+*.pyc
+.DS_Store
+.env
+.env.*
+config/telegram.json
