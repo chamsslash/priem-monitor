@@ -70,6 +70,8 @@ def _format_p1_competitor(item: P1EnrollmentBeforeDima) -> list[str]:
 
 def format_robot_result(result: RobotSimulationResult) -> str:
     if result.error:
+        if "не найден в списках вуза" in result.error:
+            return f"🤖 Робот — {result.university}\n\nВаш код не найден в списках этого вуза."
         return f"🤖 Робот — {result.university}\n\nОшибка: {result.error}"
 
     lines = [
