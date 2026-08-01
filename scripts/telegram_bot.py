@@ -23,7 +23,7 @@ from src.telegram_api import (
 )
 from src.telegram_config import load_telegram_config
 from src.telegram_format import format_push_message
-from src.telegram_notify import is_allowed, send_status, send_to_chats, send_university_report
+from src.telegram_notify import send_status, send_to_chats, send_university_report
 
 LOG_PATH = ROOT / "logs" / "telegram_bot.log"
 OFFSET_PATH = ROOT / "logs" / "telegram_offset.json"
@@ -41,17 +41,24 @@ def _command(text: str) -> str:
 
 
 def _welcome(chat_id: int) -> str:
+    from src.telegram_users import get_user_code
+
+    code = get_user_code(chat_id)
+    header = (
+        f"Вы зарегистрированы с кодом {code}.\n\n"
+        if code
+        else "Пришлите ваш уникальный код поступающего (только цифры), чтобы зарегистрироваться.\n\n"
+    )
     return (
-        "Бот мониторинга поступления.\n\n"
-        "Команды:\n"
-        "/статус — общая сводка и выбор вуза\n"
+        header
+        + "Команды:\n"
+        "/статус — ваш статус по 4 вузам (Финуниверситет, МИРЭА, МЭИ, СТАНКИН)\n"
         "/обновить — загрузить свежие списки\n"
-        "/робот [вуз] — симуляция зачисления по приоритетам\n"
+        "/робот [вуз] — подробная симуляция зачисления по одному вузу\n"
         "/робот обновить [вуз] — обновить кэш списков робота\n"
-        "/приоритет [вуз] — показать и изменить приоритеты (кнопки)\n"
-        "/help — справка\n\n"
-        f"Ваш chat_id: {chat_id}\n"
-        "Передайте его администратору, чтобы получить доступ."
+        "/приоритет [вуз] — свой порядок приоритетов (по умолчанию — как подано на сайте вуза)\n"
+        "/код <номер> — перерегистрироваться другим кодом\n"
+        "/help — справка"
     )
 
 
@@ -144,10 +151,6 @@ def _handle_priority_callback(config, callback_query: dict) -> None:
 
     chat_id = int(chat_id)
     message_id = int(message_id)
-
-    if not is_allowed(config, chat_id):
-        answer_callback_query(config.bot_token, callback_id, text="Нет доступа")
-        return
 
     if not data.startswith("prio:"):
         return
@@ -247,10 +250,6 @@ def _handle_callback(config, callback_query: dict) -> None:
 
     chat_id = int(chat_id)
 
-    if not is_allowed(config, chat_id):
-        answer_callback_query(config.bot_token, callback_id, text="Нет доступа")
-        return
-
     if data.startswith("prio:"):
         _handle_priority_callback(config, callback_query)
         return
@@ -296,11 +295,32 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
         send_message(config.bot_token, chat_id, _welcome(chat_id) if command == "/start" else _help_text(), reply_to=message_id)
         return
 
-    if not is_allowed(config, chat_id):
+    from src.telegram_users import is_registered, looks_like_code, set_user_code
+
+    if command in {"/код", "/code"}:
+        parts = text.strip().split(maxsplit=1)
+        candidate = parts[1].strip() if len(parts) > 1 else ""
+        if not looks_like_code(candidate):
+            send_message(config.bot_token, chat_id, "Код должен состоять только из цифр (4–15 символов). Пример: /код 1824102", reply_to=message_id)
+            return
+        set_user_code(chat_id, candidate)
+        send_message(config.bot_token, chat_id, f"Готово, код обновлён: {candidate}", reply_to=message_id)
+        return
+
+    if not is_registered(chat_id):
+        if not text.startswith("/") and looks_like_code(text.strip()):
+            set_user_code(chat_id, text.strip())
+            send_message(
+                config.bot_token,
+                chat_id,
+                f"Готово, код сохранён: {text.strip()}\nТеперь можно вызвать /статус.",
+                reply_to=message_id,
+            )
+            return
         send_message(
             config.bot_token,
             chat_id,
-            f"Нет доступа. Ваш chat_id: {chat_id}\nПопросите администратора добавить его в config/telegram.json",
+            "Сначала пришлите ваш уникальный код поступающего (только цифры).",
             reply_to=message_id,
         )
         return
@@ -511,8 +531,13 @@ def main() -> int:
                 continue
 
             text = message.get("text") or ""
+            chat_probe = message.get("chat") or {}
+            chat_id_probe = chat_probe.get("id")
             if not text.startswith("/"):
-                continue
+                from src.telegram_users import is_registered
+
+                if chat_id_probe is None or is_registered(int(chat_id_probe)):
+                    continue
 
             chat = message.get("chat") or {}
             chat_id = chat.get("id")
