@@ -101,7 +101,7 @@ def fetch_catalog() -> list[tuple[str, str]]:
     return _catalog_from_page(html)
 
 
-DEFAULT_BUDGET_PLACES = 30
+UNTRACKED_FALLBACK_PLACES = 30  # аппроксимация мест ТОЛЬКО для непрофильных untracked-программ каскада (вне охвата гарантии реальных мест)
 
 
 def _kcp_from_page(html: str) -> dict[str, int]:
@@ -285,7 +285,7 @@ class MpeiFullPool:
             key = str(tracked_program.id) if tracked_program else list_id
             places = kcp_places.get(title)
             if places is None:
-                places = tracked_program.budget_places if tracked_program else DEFAULT_BUDGET_PLACES
+                places = (tracked_program.budget_places or None) if tracked_program else UNTRACKED_FALLBACK_PLACES
             raw_programs.append(
                 RobotProgram(
                     key=key,

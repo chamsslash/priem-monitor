@@ -39,7 +39,7 @@ class RobotPerson:
 class RobotProgram:
     key: str
     title: str
-    budget_places: int
+    budget_places: int | None
     tracked_id: int | None = None
 
 
@@ -47,8 +47,8 @@ class RobotProgram:
 class ProgramState:
     program_key: str
     title: str
-    budget_places: int
-    remaining: int
+    budget_places: int | None
+    remaining: int | None
     tracked_id: int | None = None
     bvi_enrolled: int = 0
     exam_enrolled: int = 0
@@ -79,12 +79,12 @@ class DimaPrioritySnapshot:
     priority: int
     program_key: str
     title: str
-    budget_places: int
-    remaining_at_turn: int
+    budget_places: int | None
+    remaining_at_turn: int | None
 
     @property
     def can_enter(self) -> bool:
-        return self.remaining_at_turn > 0
+        return self.remaining_at_turn is not None and self.remaining_at_turn > 0
 
 
 @dataclass

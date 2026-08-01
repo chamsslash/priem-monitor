@@ -160,7 +160,7 @@ def _try_place(
 ) -> tuple[str | None, int | None]:
     for program_key in person.ordered_program_keys(phase=phase):
         state = states.get(program_key)
-        if state is None or state.remaining <= 0:
+        if state is None or state.remaining is None or state.remaining <= 0:
             continue
         state.remaining -= 1
         state.enrolled.append(person.code)
@@ -206,7 +206,7 @@ def _dima_first_priority(dima: RobotPerson) -> tuple[str | None, str | None]:
 
 
 def _passing_score_for_program(state: ProgramState, people_by_code: dict[str, RobotPerson]) -> int | None:
-    if state.remaining > 0:
+    if state.remaining is None or state.remaining > 0:
         return None
     scores = [people_by_code[code].score for code in state.enrolled if code in people_by_code and people_by_code[code].score > 0]
     return min(scores) if scores else None

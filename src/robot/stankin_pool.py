@@ -191,7 +191,7 @@ MIN_CATALOG_PROGRAMS = 15
 CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "cache" / "stankin_robot_pool.json"
 CACHE_TTL_SEC = 7200
 MAX_WORKERS = 6
-DEFAULT_BUDGET_PLACES = 30
+UNTRACKED_FALLBACK_PLACES = 30  # аппроксимация мест ТОЛЬКО для непрофильных untracked-программ каскада (вне охвата гарантии реальных мест)
 # Доля упавших списков, после которой сбой считается массовым/системным
 # (троттлинг, авария сайта), а не единичным сетевым сбоем одного списка —
 # при превышении _fetch_all бросает исключение, чтобы build() откатился
@@ -318,7 +318,7 @@ class StankinFullPool:
                             file=sys.stderr,
                         )
                 else:
-                    places = DEFAULT_BUDGET_PLACES
+                    places = UNTRACKED_FALLBACK_PLACES
 
             programs.append(RobotProgram(key=key, title=direction, budget_places=places, tracked_id=tracked_id))
 

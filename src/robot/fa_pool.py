@@ -32,7 +32,7 @@ CACHE_TTL_SEC = 7200
 MAX_WORKERS = 6
 FETCH_RETRIES = 3
 RETRYABLE_STATUS = {500, 502, 503, 504}
-DEFAULT_BUDGET_PLACES = 30
+UNTRACKED_FALLBACK_PLACES = 30  # аппроксимация мест ТОЛЬКО для непрофильных untracked-программ каталога ФА (вне охвата гарантии реальных мест)
 
 # Места для программ вне config/programs.json (с сайта fa.ru, раздел программ).
 FA_PLACES_OVERRIDES: dict[str, int] = {
@@ -252,7 +252,7 @@ class FaFullPool:
                 RobotProgram(
                     key=title,
                     title=title,
-                    budget_places=places.get(title, DEFAULT_BUDGET_PLACES),
+                    budget_places=places.get(title, UNTRACKED_FALLBACK_PLACES),
                     tracked_id=tracked.get(title),
                 )
             )

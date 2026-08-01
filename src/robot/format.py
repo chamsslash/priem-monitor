@@ -94,6 +94,9 @@ def format_robot_result(result: RobotSimulationResult) -> str:
         )
         lines.append(f"Учитываются приоритеты ({len(result.dima_remaining_at_turn)}):")
         for item in result.dima_remaining_at_turn:
+            if item.budget_places is None or item.remaining_at_turn is None:
+                lines.append(f"  {item.priority}. {_short_title(item.title)}: места: нет данных")
+                continue
             status = "✅" if item.can_enter else "❌"
             taken = item.budget_places - item.remaining_at_turn
             lines.append(
