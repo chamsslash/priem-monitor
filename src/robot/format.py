@@ -86,8 +86,8 @@ def format_robot_result(result: RobotSimulationResult) -> str:
         lines.append("")
         rank = result.dima_exam_queue_rank or "?"
         lines.append(
-            f"Когда очередь доходит до Димы ({result.dima_score} б., "
-            f"{rank}-й в очереди ЕГЭ, перед ним {result.dima_people_before} чел., "
+            f"Когда очередь доходит до вас ({result.dima_score} б., "
+            f"{rank}-е место в очереди ЕГЭ, перед вами {result.dima_people_before} чел., "
             f"из них зачислено {result.dima_ahead_in_exam}):"
         )
         lines.append(f"Учитываются приоритеты ({len(result.dima_remaining_at_turn)}):")
@@ -99,14 +99,14 @@ def format_robot_result(result: RobotSimulationResult) -> str:
                 f"осталось {item.remaining_at_turn}/{item.budget_places} "
                 f"(занято {taken}) {status}"
             )
-        lines.append("Снимок — до хода Димы в очереди.")
+        lines.append("Снимок — до вашего хода в очереди.")
 
     lines.append("")
     if result.dima_placed_program_key is None:
         if not result.dima_remaining_at_turn:
-            lines.append(f"❌ Дима ({result.dima_score} б.) — не в очереди (нет согласия?)")
+            lines.append(f"❌ Вы ({result.dima_score} б.) — не в очереди (нет согласия?)")
         else:
-            lines.append(f"❌ Дима ({result.dima_score} б.) — не проходит ни по одному приоритету")
+            lines.append(f"❌ Вы ({result.dima_score} б.) — не проходите ни по одному приоритету")
     else:
         via = "БВИ" if result.dima_placed_via == "bvi" else "общий конкурс"
         lines.append(f"→ Зачислится: {_short_title(result.dima_placed_title or '')}")
@@ -115,7 +115,7 @@ def format_robot_result(result: RobotSimulationResult) -> str:
     if result.dima_p1_competitors:
         lines.append("")
         p1_title = _short_title(result.dima_p1_title or "1-й приоритет")
-        lines.append(f"Зачислены на 1-й приоритет Димы до его хода ({p1_title}):")
+        lines.append(f"Зачислены на ваш 1-й приоритет до вашего хода ({p1_title}):")
         for competitor in result.dima_p1_competitors:
             lines.extend(_format_p1_competitor(competitor))
 
