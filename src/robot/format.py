@@ -6,12 +6,6 @@ from zoneinfo import ZoneInfo
 from .models import P1EnrollmentBeforeDima, RobotSimulationResult
 
 
-def _short_title(title: str, limit: int = 48) -> str:
-    if len(title) <= limit:
-        return title
-    return title[: limit - 1] + "…"
-
-
 def _format_fetched_at(iso: str | None) -> str | None:
     if not iso:
         return None
@@ -60,7 +54,7 @@ def _format_p1_competitor(item: P1EnrollmentBeforeDima) -> list[str]:
     if item.higher_priorities:
         higher_parts: list[str] = []
         for higher in item.higher_priorities:
-            part = f"пр.{higher.priority} {_short_title(higher.title, 32)}"
+            part = f"пр.{higher.priority} {higher.title}"
             if higher.passing_score is not None:
                 part += f" (проходной {higher.passing_score})"
             higher_parts.append(part)
@@ -76,13 +70,11 @@ def format_robot_result(result: RobotSimulationResult) -> str:
 
     lines = [
         _data_header(result),
-        "Только абитуриенты с согласием на зачисление",
-        f"Направлений: {result.directions_total} (весь вуз) · в очереди: {result.total_people}",
-        "Этап 1: БВИ (с согласием) → Этап 2: общий конкурс по баллам",
+        f"Направлений: {result.directions_total} (весь вуз) · в очереди: {result.total_people} "
+        f"(БВИ {result.bvi_people} · ЕГЭ {result.exam_people})",
     ]
     if not result.require_consent:
-        lines.insert(2, "⚠️ Режим без фильтра согласия")
-    lines.append(f"БВИ с согласием: {result.bvi_people} · ЕГЭ с согласием: {result.exam_people}")
+        lines.insert(1, "⚠️ Режим без фильтра согласия")
 
     if result.dima_remaining_at_turn:
         lines.append("")
@@ -95,16 +87,15 @@ def format_robot_result(result: RobotSimulationResult) -> str:
         lines.append(f"Учитываются приоритеты ({len(result.dima_remaining_at_turn)}):")
         for item in result.dima_remaining_at_turn:
             if item.budget_places is None or item.remaining_at_turn is None:
-                lines.append(f"  {item.priority}. {_short_title(item.title)}: места: нет данных")
+                lines.append(f"  {item.priority}. {item.title}: места: нет данных")
                 continue
             status = "✅" if item.can_enter else "❌"
             taken = item.budget_places - item.remaining_at_turn
             lines.append(
-                f"  {item.priority}. {_short_title(item.title)}: "
+                f"  {item.priority}. {item.title}: "
                 f"осталось {item.remaining_at_turn}/{item.budget_places} "
                 f"(занято {taken}) {status}"
             )
-        lines.append("Снимок — до вашего хода в очереди.")
 
     lines.append("")
     if result.dima_placed_program_key is None:
@@ -114,12 +105,12 @@ def format_robot_result(result: RobotSimulationResult) -> str:
             lines.append(f"❌ Вы ({result.dima_score} б.) — не проходите ни по одному приоритету")
     else:
         via = "БВИ" if result.dima_placed_via == "bvi" else "общий конкурс"
-        lines.append(f"→ Зачислится: {_short_title(result.dima_placed_title or '')}")
+        lines.append(f"→ Зачислится: {result.dima_placed_title or ''}")
         lines.append(f"  {result.dima_priority_used}-й приоритет · этап: {via}")
 
     if result.dima_p1_competitors:
         lines.append("")
-        p1_title = _short_title(result.dima_p1_title or "1-й приоритет")
+        p1_title = result.dima_p1_title or "1-й приоритет"
         lines.append(f"Зачислены на ваш 1-й приоритет до вашего хода ({p1_title}):")
         for competitor in result.dima_p1_competitors:
             lines.extend(_format_p1_competitor(competitor))
