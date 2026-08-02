@@ -3,7 +3,17 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from ..config_loader import load_programs
+from .direction_keys import okso_code_for_program
 from .models import CompetitorBeforeDima, RobotSimulationResult
+
+
+def _okso_by_tracked_id() -> dict[int, str]:
+    return {
+        program.id: code
+        for program in load_programs()
+        if (code := okso_code_for_program(program)) is not None
+    }
 
 
 def _format_fetched_at(iso: str | None) -> str | None:
@@ -85,15 +95,18 @@ def format_robot_result(result: RobotSimulationResult) -> str:
             f"из них зачислено {result.dima_ahead_in_exam}):"
         )
         lines.append(f"Учитываются приоритеты ({len(result.dima_remaining_at_turn)}):")
+        okso_by_id = _okso_by_tracked_id()
         for item in result.dima_remaining_at_turn:
-            code = f"[{item.tracked_id}] " if item.tracked_id is not None else ""
+            okso = okso_by_id.get(item.tracked_id) if item.tracked_id is not None else None
+            prefix = f"{okso} " if okso else ""
+            suffix = f" (код {item.tracked_id})" if item.tracked_id is not None else ""
             if item.budget_places is None or item.remaining_at_turn is None:
-                lines.append(f"  {item.priority}. {code}{item.title}: места: нет данных")
+                lines.append(f"  {item.priority}. {prefix}{item.title}{suffix}: места: нет данных")
                 continue
             status = "✅" if item.can_enter else "❌"
             taken = item.budget_places - item.remaining_at_turn
             lines.append(
-                f"  {item.priority}. {code}{item.title}: "
+                f"  {item.priority}. {prefix}{item.title}{suffix}: "
                 f"осталось {item.remaining_at_turn}/{item.budget_places} "
                 f"(занято {taken}) {status}"
             )
@@ -123,13 +136,15 @@ def format_competitors(result: RobotSimulationResult, tracked_id: int) -> str:
         return f"🤖 Конкуренты — {result.university}\n\nНет направления с кодом {tracked_id}. Доступные коды: {available}"
 
     competitors = result.dima_competitors_by_program.get(state.program_key)
+    okso = _okso_by_tracked_id().get(tracked_id)
+    label = f"{okso} {state.title} (код {tracked_id})" if okso else f"{state.title} (код {tracked_id})"
     if competitors is None:
         return (
             f"🤖 Конкуренты — {result.university}\n\n"
-            f"[{tracked_id}] {state.title} не входит в ваши приоритеты — по нему нет данных о соперниках."
+            f"{label} не входит в ваши приоритеты — по нему нет данных о соперниках."
         )
 
-    lines = [f"🤖 Конкуренты на [{tracked_id}] {state.title} до вашего хода:"]
+    lines = [f"🤖 Конкуренты на {label} до вашего хода:"]
     if not competitors:
         lines.append("Никого — на момент вашего хода ещё никто сюда не зачислился.")
     else:
