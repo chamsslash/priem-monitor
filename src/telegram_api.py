@@ -45,6 +45,41 @@ def send_message(
     _call(token, "sendMessage", payload)
 
 
+TELEGRAM_MESSAGE_LIMIT = 4096
+
+
+def _split_into_chunks(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in text.split("\n"):
+        extra = len(line) + (1 if current else 0)
+        if current and current_len + extra > limit:
+            chunks.append("\n".join(current))
+            current = []
+            current_len = 0
+            extra = len(line)
+        current.append(line)
+        current_len += extra
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+def send_long_message(
+    token: str,
+    chat_id: int,
+    text: str,
+    reply_to: int | None = None,
+) -> None:
+    """Как send_message, но режет текст по границам строк на части ≤4096 символов —
+    лимит Telegram sendMessage, иначе API отвечает 400 Bad Request."""
+    for index, chunk in enumerate(_split_into_chunks(text)):
+        send_message(token, chat_id, chunk, reply_to=reply_to if index == 0 else None)
+
+
 def edit_message_text(
     token: str,
     chat_id: int,

@@ -19,6 +19,7 @@ from src.telegram_api import (
     get_updates,
     load_offset,
     save_offset,
+    send_long_message,
     send_message,
 )
 from src.telegram_config import load_telegram_config
@@ -477,7 +478,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             settings = build_robot_settings(code, university)
             priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
             result = run_robot_simulation(university, settings=settings, use_cache=True, priority_ids=priority_ids)
-            send_message(config.bot_token, chat_id, format_robot_result(result), reply_to=message_id)
+            send_long_message(config.bot_token, chat_id, format_robot_result(result), reply_to=message_id)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Robot simulation failed: %s", exc)
             send_message(config.bot_token, chat_id, f"Ошибка симуляции робота:\n{exc}", reply_to=message_id)
