@@ -6,9 +6,9 @@ from .config import RobotSettings, load_robot_config
 from .direction_keys import direction_key_for_program
 from .priorities import program_display_name
 from .models import (
+    CompetitorBeforeDima,
     DimaPrioritySnapshot,
     P1CompetitorHigherPriority,
-    P1EnrollmentBeforeDima,
     ProgramChoice,
     ProgramState,
     RobotPerson,
@@ -193,16 +193,10 @@ def _dima_remaining_snapshot(
                 title=state.title,
                 budget_places=state.budget_places,
                 remaining_at_turn=state.remaining,
+                tracked_id=state.tracked_id,
             )
         )
     return snapshots
-
-
-def _dima_first_priority(dima: RobotPerson) -> tuple[str | None, str | None]:
-    if not dima.choices:
-        return None, None
-    first = min(dima.choices, key=lambda item: item.priority)
-    return first.program_key, None
 
 
 def _passing_score_for_program(state: ProgramState, people_by_code: dict[str, RobotPerson]) -> int | None:
@@ -212,14 +206,14 @@ def _passing_score_for_program(state: ProgramState, people_by_code: dict[str, Ro
     return min(scores) if scores else None
 
 
-def _build_p1_competitor(
+def _build_competitor(
     person: RobotPerson,
     *,
     program_key: str,
     phase: str,
     states: dict[str, ProgramState],
     people_by_code: dict[str, RobotPerson],
-) -> P1EnrollmentBeforeDima:
+) -> CompetitorBeforeDima:
     priority_on_program = _priority_on_program(person, program_key)
     higher_priorities: list[P1CompetitorHigherPriority] = []
     seen_higher: set[str] = set()
@@ -240,13 +234,13 @@ def _build_p1_competitor(
                 passing_score=_passing_score_for_program(state, people_by_code),
             )
         )
-    return P1EnrollmentBeforeDima(
+    return CompetitorBeforeDima(
         code=person.code,
         score=person.score,
         consent=person.consent,
         priority_on_program=priority_on_program,
         phase=phase,
-        via_p1_consent=priority_on_program == 1 and person.consent,
+        top_choice_consent=priority_on_program == 1 and person.consent,
         higher_priorities=higher_priorities,
     )
 
@@ -281,9 +275,9 @@ def _simulate_two_phase(
     dima_people_before = 0
     dima_ahead_in_exam = 0
     dima_remaining_at_turn: list[DimaPrioritySnapshot] = []
-    dima_p1_competitors: list[P1EnrollmentBeforeDima] = []
+    dima_program_keys = {choice.program_key for choice in dima.choices}
+    dima_competitors_by_program: dict[str, list[CompetitorBeforeDima]] = {key: [] for key in dima_program_keys}
 
-    dima_p1_program_key, _ = _dima_first_priority(dima)
     people_by_code = {person.code: person for person in people}
 
     if dima_in_pool:
@@ -298,13 +292,9 @@ def _simulate_two_phase(
         program_key, priority = _try_place(person, states, phase="bvi")
         if program_key is not None:
             placed_codes.add(person.code)
-            if (
-                dima_p1_program_key is not None
-                and program_key == dima_p1_program_key
-                and person.code != dima.code
-            ):
-                dima_p1_competitors.append(
-                    _build_p1_competitor(
+            if program_key in dima_competitors_by_program and person.code != dima.code:
+                dima_competitors_by_program[program_key].append(
+                    _build_competitor(
                         person,
                         program_key=program_key,
                         phase="bvi",
@@ -345,14 +335,9 @@ def _simulate_two_phase(
         if program_key is None:
             continue
         placed_codes.add(person.code)
-        if (
-            before_dima
-            and dima_p1_program_key is not None
-            and program_key == dima_p1_program_key
-            and person.code != dima.code
-        ):
-            dima_p1_competitors.append(
-                _build_p1_competitor(
+        if before_dima and program_key in dima_competitors_by_program and person.code != dima.code:
+            dima_competitors_by_program[program_key].append(
+                _build_competitor(
                     person,
                     program_key=program_key,
                     phase="exam",
@@ -368,7 +353,6 @@ def _simulate_two_phase(
             dima_ahead_in_exam += 1
 
     dima_title = states[dima_program_key].title if dima_program_key else None
-    dima_p1_title = states[dima_p1_program_key].title if dima_p1_program_key else None
     tracked_states = sorted(
         [state for state in states.values() if state.tracked_id is not None],
         key=lambda item: item.tracked_id or 0,
@@ -396,9 +380,7 @@ def _simulate_two_phase(
         dima_placed_title=dima_title,
         dima_priority_used=dima_priority_used,
         dima_placed_via=dima_placed_via,
-        dima_p1_program_key=dima_p1_program_key,
-        dima_p1_title=dima_p1_title,
-        dima_p1_competitors=dima_p1_competitors,
+        dima_competitors_by_program=dima_competitors_by_program,
         programs=sorted(states.values(), key=lambda item: item.title),
         tracked_programs=tracked_states,
         require_consent=require_consent,
@@ -517,6 +499,4 @@ def run_robot_simulation(
             snapshot.title = display_titles[snapshot.program_key]
     if result.dima_placed_program_key in display_titles:
         result.dima_placed_title = display_titles[result.dima_placed_program_key]
-    if result.dima_p1_program_key in display_titles:
-        result.dima_p1_title = display_titles[result.dima_p1_program_key]
     return result

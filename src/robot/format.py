@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .models import P1EnrollmentBeforeDima, RobotSimulationResult
+from .models import CompetitorBeforeDima, RobotSimulationResult
 
 
 def _format_fetched_at(iso: str | None) -> str | None:
@@ -43,11 +43,11 @@ def format_robot_cache_refresh(
     )
 
 
-def _format_p1_competitor(item: P1EnrollmentBeforeDima) -> list[str]:
+def _format_competitor(item: CompetitorBeforeDima) -> list[str]:
     score_note = f", {item.score} б." if item.phase == "exam" and item.score > 0 else ""
     if item.phase == "bvi":
         score_note = ", БВИ"
-    if item.via_p1_consent:
+    if item.top_choice_consent:
         return [f"• {item.code}{score_note} — пр.1 + согласие"]
 
     lines = [f"• {item.code}{score_note}, пр. на программу: {item.priority_on_program}"]
@@ -86,13 +86,14 @@ def format_robot_result(result: RobotSimulationResult) -> str:
         )
         lines.append(f"Учитываются приоритеты ({len(result.dima_remaining_at_turn)}):")
         for item in result.dima_remaining_at_turn:
+            code = f"[{item.tracked_id}] " if item.tracked_id is not None else ""
             if item.budget_places is None or item.remaining_at_turn is None:
-                lines.append(f"  {item.priority}. {item.title}: места: нет данных")
+                lines.append(f"  {item.priority}. {code}{item.title}: места: нет данных")
                 continue
             status = "✅" if item.can_enter else "❌"
             taken = item.budget_places - item.remaining_at_turn
             lines.append(
-                f"  {item.priority}. {item.title}: "
+                f"  {item.priority}. {code}{item.title}: "
                 f"осталось {item.remaining_at_turn}/{item.budget_places} "
                 f"(занято {taken}) {status}"
             )
@@ -108,11 +109,30 @@ def format_robot_result(result: RobotSimulationResult) -> str:
         lines.append(f"→ Зачислится: {result.dima_placed_title or ''}")
         lines.append(f"  {result.dima_priority_used}-й приоритет · этап: {via}")
 
-    if result.dima_p1_competitors:
+    if result.dima_competitors_by_program:
         lines.append("")
-        p1_title = result.dima_p1_title or "1-й приоритет"
-        lines.append(f"Зачислены на ваш 1-й приоритет до вашего хода ({p1_title}):")
-        for competitor in result.dima_p1_competitors:
-            lines.extend(_format_p1_competitor(competitor))
+        lines.append("Список тех, кто впереди вас по каждому приоритету: /конкуренты <вуз> <код>")
 
+    return "\n".join(lines)
+
+
+def format_competitors(result: RobotSimulationResult, tracked_id: int) -> str:
+    state = next((item for item in result.tracked_programs if item.tracked_id == tracked_id), None)
+    if state is None:
+        available = ", ".join(str(item.tracked_id) for item in result.tracked_programs)
+        return f"🤖 Конкуренты — {result.university}\n\nНет направления с кодом {tracked_id}. Доступные коды: {available}"
+
+    competitors = result.dima_competitors_by_program.get(state.program_key)
+    if competitors is None:
+        return (
+            f"🤖 Конкуренты — {result.university}\n\n"
+            f"[{tracked_id}] {state.title} не входит в ваши приоритеты — по нему нет данных о соперниках."
+        )
+
+    lines = [f"🤖 Конкуренты на [{tracked_id}] {state.title} до вашего хода:"]
+    if not competitors:
+        lines.append("Никого — на момент вашего хода ещё никто сюда не зачислился.")
+    else:
+        for competitor in competitors:
+            lines.extend(_format_competitor(competitor))
     return "\n".join(lines)

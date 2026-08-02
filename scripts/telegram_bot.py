@@ -57,6 +57,7 @@ def _welcome(chat_id: int) -> str:
         "/обновить — загрузить свежие списки\n"
         "/робот [вуз] — подробная симуляция зачисления по одному вузу\n"
         "/робот обновить [вуз] — обновить кэш списков робота\n"
+        "/конкуренты [вуз] <код> — кто впереди вас по направлению (код см. в /робот)\n"
         "/приоритет [вуз] — свой порядок приоритетов (по умолчанию — как подано на сайте вуза)\n"
         "/код <номер> — перерегистрироваться другим кодом\n"
         "/help — справка"
@@ -74,6 +75,7 @@ def _help_text() -> str:
         "/обновить — запустить парсинг (работает, пока включён Mac)\n"
         f"/робот [{supported}] — симуляция робота зачисления\n"
         f"/робот обновить [{supported}] — обновить кэш списков робота (сейчас: {ready})\n"
+        f"/конкуренты [{supported}] <код> — кто впереди вас по направлению (код см. в /робот)\n"
         f"/приоритет [{supported}] — текущие приоритеты и настройка кнопками\n"
         "/help — эта справка"
     )
@@ -482,6 +484,68 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
         except Exception as exc:  # noqa: BLE001
             logger.exception("Robot simulation failed: %s", exc)
             send_message(config.bot_token, chat_id, f"Ошибка симуляции робота:\n{exc}", reply_to=message_id)
+        return
+
+    if command in {"/конкуренты", "/competitors"}:
+        parts = text.strip().split()
+        try:
+            from src.robot.format import format_competitors
+            from src.robot.priorities import get_saved_priority_ids
+            from src.robot.simulator import run_robot_simulation
+            from src.robot.universities import SUPPORTED_UNIVERSITIES, match_university_prefix
+
+            if len(parts) < 2:
+                send_message(
+                    config.bot_token,
+                    chat_id,
+                    "Использование: /конкуренты <вуз> <код направления> (код виден в ответе /робот)",
+                    reply_to=message_id,
+                )
+                return
+
+            matched, consumed = match_university_prefix(parts[1:])
+            university = matched if matched is not None else "МИРЭА"
+            rest = parts[1 + consumed :] if matched is not None else parts[1:]
+
+            if SUPPORTED_UNIVERSITIES.get(university) is None:
+                send_message(
+                    config.bot_token,
+                    chat_id,
+                    f"Робот не поддерживает «{university}». Доступно: {', '.join(sorted(SUPPORTED_UNIVERSITIES))}",
+                    reply_to=message_id,
+                )
+                return
+
+            if not rest or not rest[0].isdigit():
+                send_message(
+                    config.bot_token,
+                    chat_id,
+                    "Укажите код направления, например: /конкуренты МЭИ 22",
+                    reply_to=message_id,
+                )
+                return
+            tracked_id = int(rest[0])
+
+            from src.telegram_users import build_robot_settings, get_user_code, robot_config_path
+
+            code = get_user_code(chat_id)
+            if not code:
+                send_message(config.bot_token, chat_id, "Сначала пришлите ваш код поступающего.", reply_to=message_id)
+                return
+
+            send_message(
+                config.bot_token,
+                chat_id,
+                f"Ищу соперников по коду {tracked_id} ({university})…",
+                reply_to=message_id,
+            )
+            settings = build_robot_settings(code, university)
+            priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
+            result = run_robot_simulation(university, settings=settings, use_cache=True, priority_ids=priority_ids)
+            send_long_message(config.bot_token, chat_id, format_competitors(result, tracked_id), reply_to=message_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Competitors lookup failed: %s", exc)
+            send_message(config.bot_token, chat_id, f"Ошибка:\n{exc}", reply_to=message_id)
         return
 
     if command in {"/приоритет", "/приоритеты", "/priority"}:

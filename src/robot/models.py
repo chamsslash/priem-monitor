@@ -64,13 +64,13 @@ class P1CompetitorHigherPriority:
 
 
 @dataclass
-class P1EnrollmentBeforeDima:
+class CompetitorBeforeDima:
     code: str
     score: int
     consent: bool
     priority_on_program: int
     phase: str
-    via_p1_consent: bool
+    top_choice_consent: bool
     higher_priorities: list[P1CompetitorHigherPriority] = field(default_factory=list)
 
 
@@ -81,6 +81,7 @@ class DimaPrioritySnapshot:
     title: str
     budget_places: int | None
     remaining_at_turn: int | None
+    tracked_id: int | None = None
 
     @property
     def can_enter(self) -> bool:
@@ -107,9 +108,7 @@ class RobotSimulationResult:
     programs: list[ProgramState]
     tracked_programs: list[ProgramState]
     require_consent: bool
-    dima_p1_program_key: str | None = None
-    dima_p1_title: str | None = None
-    dima_p1_competitors: list[P1EnrollmentBeforeDima] = field(default_factory=list)
+    dima_competitors_by_program: dict[str, list[CompetitorBeforeDima]] = field(default_factory=dict)
     from_cache: bool = False
     fetched_at: str | None = None
     error: str | None = None
