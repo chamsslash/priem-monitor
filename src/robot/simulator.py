@@ -142,7 +142,11 @@ def _resolve_dima_person(
         if saved_ids is None:
             saved_ids = [int(item) for item in university_cfg.get("dima_priorities", [])]
         if saved_ids:
-            dima = _apply_priority_order(dima, tracked_programs, saved_ids)
+            # require_in_pool=False: заявка Димы на направление реальна и известна из
+            # конфига независимо от того, попала ли его строка в пул конкурентов — если
+            # её исключили как «Зачисляется в другой КГ» (он уже проходит выше), это не
+            # значит, что он сюда не подавал, и это направление всё равно нужно показать.
+            dima = _apply_priority_order(dima, tracked_programs, saved_ids, require_in_pool=False)
         return dima, True
     return _build_dima_person(settings, university_cfg, tracked_programs, priority_ids=priority_ids), False
 
