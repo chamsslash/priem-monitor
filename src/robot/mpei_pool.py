@@ -114,25 +114,6 @@ def _bacc_url_for_list_id(list_id: str) -> str | None:
     return BACC_URL_TEMPLATE.format(n=match.group(1))
 
 
-def fetch_vacant_places(list_id: str) -> int | None:
-    """Основные места по официальному списку волны зачисления (сейчас — 7 августа 2026).
-
-    Ранее места считались как «Всего минус квоты» по статичной плановой
-    таблице speclist_simple.html — но у многопрофильных групп (несколько
-    институтов на один список абитуриентов, например id22/id45) это давало
-    неверную сумму, не совпадающую с тем, что публикует сам МЭИ. Список
-    /inform/list<N>bacc.html — это официальная страница конкретно для
-    решения по зачислению, «Количество вакантных мест» там уже учитывает
-    объединение институтов и прочую специфику группы без ручного пересчёта.
-    """
-    url = _bacc_url_for_list_id(list_id)
-    if url is None:
-        return None
-    html = _get(url)
-    match = _VACANT_RE.search(html)
-    return int(match.group(1)) if match else None
-
-
 def _expand_row_cells(row) -> list[str]:
     cells: list[str] = []
     for cell in row.find_all(["td", "th"]):
@@ -142,7 +123,20 @@ def _expand_row_cells(row) -> list[str]:
     return cells
 
 
-def _rows_from_page(html: str) -> list[dict]:
+def _rows_and_vacant_from_bacc(html: str) -> tuple[list[dict], int | None]:
+    """Абитуриенты и «Количество вакантных мест» со страницы конкретной волны зачисления.
+
+    У /inform/list<N>bacc.html есть то, чего нет на обычном /info/entrants_list<N>.html:
+    колонка «Примечание» реально заполнена пометкой «Зачисляется в другой КГ» —
+    сайт уже определил, что конкретно этот человек, несмотря на присутствие в
+    этом списке, займёт место в ДРУГОЙ конкурсной группе, а не здесь. Без
+    исключения таких строк наш каскад считает их «занявшими» место в этом
+    направлении, которое реально свободно (проверено живьём: pk.mpei.ru
+    показывает меньше занятых мест по итогу, чем получалось у нас).
+    """
+    vacant_match = _VACANT_RE.search(html)
+    vacant = int(vacant_match.group(1)) if vacant_match else None
+
     soup = BeautifulSoup(html, "lxml")
     tables = soup.find_all("table")
     if not tables:
@@ -157,6 +151,7 @@ def _rows_from_page(html: str) -> list[dict]:
     score_idx = header_index(headers, "сумма")
     consent_idx = header_index(headers, "согласие")
     priority_idx = header_index(headers, "приоритет")
+    note_idx = header_index(headers, "примечание")
     if None in (code_idx, score_idx, consent_idx, priority_idx):
         raise ValueError("Не удалось определить колонки таблицы МЭИ")
 
@@ -164,6 +159,8 @@ def _rows_from_page(html: str) -> list[dict]:
     for row in rows[2:]:
         cells = _expand_row_cells(row)
         if len(cells) <= max(code_idx, score_idx, consent_idx, priority_idx):
+            continue
+        if note_idx is not None and note_idx < len(cells) and "другой КГ" in cells[note_idx]:
             continue
         score = to_int(cells[score_idx])
         if not score or score <= 0:
@@ -179,12 +176,13 @@ def _rows_from_page(html: str) -> list[dict]:
                 "priority": to_int(cells[priority_idx]) or 99,
             }
         )
-    return result
+    return result, vacant
 
 
-def fetch_list_rows(list_id: str) -> list[dict]:
-    html = _get(urljoin(CATALOG_URL, list_id))
-    return _rows_from_page(html)
+def fetch_list_rows_and_vacant(list_id: str) -> tuple[list[dict], int | None]:
+    url = _bacc_url_for_list_id(list_id) or urljoin(CATALOG_URL, list_id)
+    html = _get(url)
+    return _rows_and_vacant_from_bacc(html)
 
 
 def tracked_programs() -> list[ProgramConfig]:
@@ -224,12 +222,13 @@ class MpeiFullPool:
         vacant_by_list: dict[str, int] = {}
         failed_lists: list[str] = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            row_futures = {executor.submit(fetch_list_rows, list_id): (title, list_id) for title, list_id in catalog}
-            vacant_futures = {executor.submit(fetch_vacant_places, list_id): list_id for _, list_id in catalog}
-            for future in as_completed(row_futures):
-                title, list_id = row_futures[future]
+            futures = {
+                executor.submit(fetch_list_rows_and_vacant, list_id): (title, list_id) for title, list_id in catalog
+            }
+            for future in as_completed(futures):
+                title, list_id = futures[future]
                 try:
-                    rows_by_list[list_id] = future.result()
+                    rows, vacant = future.result()
                 except Exception as exc:
                     failed_lists.append(list_id)
                     print(
@@ -239,19 +238,10 @@ class MpeiFullPool:
                         "сохранятся, но конкурс по нему не будет учтён в этом цикле сборки).",
                         file=sys.stderr,
                     )
-            for future in as_completed(vacant_futures):
-                list_id = vacant_futures[future]
-                try:
-                    places = future.result()
-                except Exception as exc:
-                    print(
-                        f"ВНИМАНИЕ: не удалось загрузить вакантные места МЭИ ({list_id}) "
-                        f"после исчерпания ретраев ({exc}) — будет использован fallback.",
-                        file=sys.stderr,
-                    )
                     continue
-                if places is not None:
-                    vacant_by_list[list_id] = places
+                rows_by_list[list_id] = rows
+                if vacant is not None:
+                    vacant_by_list[list_id] = vacant
 
         if catalog and len(failed_lists) / len(catalog) > MAX_FAILED_FRACTION:
             raise RuntimeError(
