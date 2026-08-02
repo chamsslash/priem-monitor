@@ -18,7 +18,6 @@ from ..parsers.utils import header_index, normalize_yes, to_int
 from .models import ProgramChoice, RobotPerson, RobotProgram
 
 CATALOG_URL = "https://pk.mpei.ru/info/entrants_list"
-KCP_URL = "https://pk.mpei.ru/info/speclist_simple.html"
 
 _SECTION_START = "Бакалавриат очная форма обучения"
 _SECTION_END = "Бакалавриат очно-заочная форма обучения"
@@ -37,30 +36,6 @@ MAX_WORKERS = 6
 # при превышении _fetch_all бросает исключение, чтобы build() откатился
 # на устаревший кэш вместо сохранения почти пустого датасета.
 MAX_FAILED_FRACTION = 0.5
-
-# Точечные переопределения основных мест для конкурсных групп, чей единый
-# список абитуриентов (entrants_listNNN.html) официально объединяет
-# НЕСКОЛЬКО отдельных профилей/направлений с разными квотами каждый —
-# _kcp_from_page берёт только первую rowspan-строку таблицы КЦП и потому
-# структурно не может просуммировать остальные профили группы.
-#
-# "Прикладная математика, информатика, математическое моделирование"
-# (entrants_list16.html) объединяет ОДНИМ списком три профиля (проверено
-# живьём на pk.mpei.ru: catalog-страница явно перечисляет все три кода в
-# скобках у одного href, KCP-таблица — три rowspan-строки под одним
-# названием группы):
-#   МПОВМКС (наша id22, ИВТИ):        Всего 50, особая 5, отдельная 5, целевая 4
-#   Математическое моделирование:     Всего 35, особая 4, отдельная 4, целевая — общая с МПОВМКС (rowspan)
-#   Механика и мат.моделирование (ЭнМИ): Всего 15, особая 2, отдельная 2, целевая 0
-# Основные = (50+35+15) − (5+4+2) − (5+4+2) − 4 [целевая общая, не дважды] = 74.
-# Совпадает день-в-день с официальным «Количество вакантных мест: 74» на
-# итоговом конкурсном списке зачисления 7 августа 2026
-# (pk.mpei.ru/inform/list16bacc.html). Остальные 4 отслеживаемых направления
-# МЭИ проверены по catalog-странице — у каждого ровно один код без
-# перечисления через ";", список не общий, переопределение не нужно.
-MPEI_KCP_OVERRIDES: dict[str, int] = {
-    "Прикладная математика, информатика, математическое моделирование": 74,
-}
 
 
 def _extract_list_id(text: str) -> str | None:
@@ -127,59 +102,35 @@ def fetch_catalog() -> list[tuple[str, str]]:
 
 UNTRACKED_FALLBACK_PLACES = 30  # аппроксимация мест ТОЛЬКО для непрофильных untracked-программ каскада (вне охвата гарантии реальных мест)
 
+BACC_URL_TEMPLATE = "https://pk.mpei.ru/inform/list{n}bacc.html"
+_VACANT_RE = re.compile(r"Количество вакантных мест:\s*(\d+)")
+_LIST_ID_NUMBER_RE = re.compile(r"entrants_list(\d+)\.html")
 
-def _kcp_from_page(html: str) -> dict[str, int]:
-    """Официальные КЦП (очная форма) по названию конкурсной группы.
 
-    Таблица `kcp-table`: у многопрофильных групп название стоит только
-    в первой строке (rowspan), у следующих строк той же группы — нет,
-    поэтому название запоминается и используется для всех строк подряд,
-    пока не встретится следующее название. Число мест — основные места
-    общего конкурса: колонка «Всего» (`numbers[0]`) за вычетом квот —
-    особой (`numbers[1]`), отдельной (`numbers[2]`) и целевой
-    (`numbers[3]`), т.к. робот моделирует именно общий конкурс по ЕГЭ,
-    без учёта квотных мест.
+def _bacc_url_for_list_id(list_id: str) -> str | None:
+    match = _LIST_ID_NUMBER_RE.fullmatch(list_id)
+    if not match:
+        return None
+    return BACC_URL_TEMPLATE.format(n=match.group(1))
+
+
+def fetch_vacant_places(list_id: str) -> int | None:
+    """Основные места по официальному списку волны зачисления (сейчас — 7 августа 2026).
+
+    Ранее места считались как «Всего минус квоты» по статичной плановой
+    таблице speclist_simple.html — но у многопрофильных групп (несколько
+    институтов на один список абитуриентов, например id22/id45) это давало
+    неверную сумму, не совпадающую с тем, что публикует сам МЭИ. Список
+    /inform/list<N>bacc.html — это официальная страница конкретно для
+    решения по зачислению, «Количество вакантных мест» там уже учитывает
+    объединение институтов и прочую специфику группы без ручного пересчёта.
     """
-    soup = BeautifulSoup(html, "lxml")
-    table = soup.find("table", class_="kcp-table")
-    if table is None:
-        raise ValueError("Не найдена таблица kcp-table")
-
-    result: dict[str, int] = {}
-    current_title: str | None = None
-    in_daytime_section = False
-    for row in table.find_all("tr"):
-        cells = row.find_all("td")
-        if not cells:
-            continue
-        text0 = cells[0].get_text(" ", strip=True)
-
-        if text0 == "Очная форма обучения":
-            in_daytime_section = True
-            continue
-        if text0 in ("Очно-заочная форма обучения", "Заочная форма обучения"):
-            break
-        if not in_daytime_section:
-            continue
-
-        if not text0.isdigit():
-            current_title = text0
-        if current_title is None:
-            continue
-
-        numbers = [int(c.get_text(strip=True)) for c in cells if c.get_text(strip=True).isdigit()]
-        if len(numbers) >= 4:
-            osnovnye = numbers[0] - numbers[1] - numbers[2] - numbers[3]
-            if osnovnye > 0:
-                result.setdefault(current_title, osnovnye)
-    if not result:
-        raise ValueError("Не удалось извлечь КЦП из kcp-table")
-    return result
-
-
-def fetch_kcp_places() -> dict[str, int]:
-    html = _get(KCP_URL)
-    return _kcp_from_page(html)
+    url = _bacc_url_for_list_id(list_id)
+    if url is None:
+        return None
+    html = _get(url)
+    match = _VACANT_RE.search(html)
+    return int(match.group(1)) if match else None
 
 
 def _expand_row_cells(row) -> list[str]:
@@ -257,8 +208,7 @@ class MpeiFullPool:
                 return cached
         try:
             catalog = fetch_catalog()
-            kcp_places = self._safe_kcp_places()
-            people, programs = self._fetch_all(catalog, kcp_places)
+            people, programs = self._fetch_all(catalog)
             fetched_at = datetime.now(timezone.utc).isoformat()
             self._save_cache(people, programs, fetched_at)
             return people, programs, fetched_at, False
@@ -268,23 +218,16 @@ class MpeiFullPool:
                 return stale
             raise
 
-    @staticmethod
-    def _safe_kcp_places() -> dict[str, int]:
-        try:
-            return fetch_kcp_places()
-        except Exception:
-            return {}
-
-    def _fetch_all(
-        self, catalog: list[tuple[str, str]], kcp_places: dict[str, int]
-    ) -> tuple[list[RobotPerson], list[RobotProgram]]:
+    def _fetch_all(self, catalog: list[tuple[str, str]]) -> tuple[list[RobotPerson], list[RobotProgram]]:
         raw_programs: list[RobotProgram] = []
         rows_by_list: dict[str, list[dict]] = {}
+        vacant_by_list: dict[str, int] = {}
         failed_lists: list[str] = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {executor.submit(fetch_list_rows, list_id): (title, list_id) for title, list_id in catalog}
-            for future in as_completed(futures):
-                title, list_id = futures[future]
+            row_futures = {executor.submit(fetch_list_rows, list_id): (title, list_id) for title, list_id in catalog}
+            vacant_futures = {executor.submit(fetch_vacant_places, list_id): list_id for _, list_id in catalog}
+            for future in as_completed(row_futures):
+                title, list_id = row_futures[future]
                 try:
                     rows_by_list[list_id] = future.result()
                 except Exception as exc:
@@ -296,6 +239,19 @@ class MpeiFullPool:
                         "сохранятся, но конкурс по нему не будет учтён в этом цикле сборки).",
                         file=sys.stderr,
                     )
+            for future in as_completed(vacant_futures):
+                list_id = vacant_futures[future]
+                try:
+                    places = future.result()
+                except Exception as exc:
+                    print(
+                        f"ВНИМАНИЕ: не удалось загрузить вакантные места МЭИ ({list_id}) "
+                        f"после исчерпания ретраев ({exc}) — будет использован fallback.",
+                        file=sys.stderr,
+                    )
+                    continue
+                if places is not None:
+                    vacant_by_list[list_id] = places
 
         if catalog and len(failed_lists) / len(catalog) > MAX_FAILED_FRACTION:
             raise RuntimeError(
@@ -311,7 +267,7 @@ class MpeiFullPool:
         for title, list_id in catalog:
             tracked_program = tracked.get(list_id)
             key = str(tracked_program.id) if tracked_program else list_id
-            places = MPEI_KCP_OVERRIDES.get(title, kcp_places.get(title))
+            places = vacant_by_list.get(list_id)
             if places is None:
                 places = (tracked_program.budget_places or None) if tracked_program else UNTRACKED_FALLBACK_PLACES
             raw_programs.append(
