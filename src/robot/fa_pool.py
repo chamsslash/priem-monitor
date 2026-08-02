@@ -54,6 +54,14 @@ def _is_bachelor_day_title(title: str) -> bool:
 
 
 class FaFullPool:
+    FIELD_LABELS = {
+        "code": "Уникальный код поступающего",
+        "priority": "Приоритет зачисления, указанный поступающим по данной конкурсной группе",
+        "is_bvi": "Без ВИ",
+        "score": "Сумма конкурсных баллов",
+        "consent": "Наличие согласия на зачисление",
+    }
+
     def build(self, *, use_cache: bool = True) -> tuple[list[RobotPerson], list[RobotProgram], str, bool]:
         if use_cache:
             cached = self._load_cache()
@@ -192,14 +200,20 @@ class FaFullPool:
             soup = BeautifulSoup(html, "lxml")
             page_rows = 0
             for row in soup.select("tbody tr"):
-                cells = [cell.get_text(" ", strip=True) for cell in row.find_all("td")]
-                if not cells or not cells[0].isdigit() or len(cells) < 18:
+                cells = row.find_all("td")
+                if not cells or not cells[0].get_text(strip=True).isdigit():
                     continue
                 page_rows += 1
-                score = int(to_float(cells[9]) or 0)
+
+                fields = {(cell.get("data-label") or "").strip(): cell.get_text(" ", strip=True) for cell in cells}
+                for label in self.FIELD_LABELS.values():
+                    if label not in fields:
+                        raise ValueError(f"На сайте ФА не найдена колонка {label!r} — вёрстка снова изменилась")
+
+                score = int(to_float(fields[self.FIELD_LABELS["score"]]) or 0)
                 if score <= 0:
                     continue
-                code = cells[1].strip()
+                code = fields[self.FIELD_LABELS["code"]].strip()
                 if not code:
                     continue
                 rows.append(
@@ -207,9 +221,9 @@ class FaFullPool:
                         "code": code,
                         "program_key": title,
                         "score": score,
-                        "consent": normalize_yes(cells[17]),
-                        "is_bvi": normalize_yes(cells[8]),
-                        "priority": to_int(cells[4]) or 99,
+                        "consent": normalize_yes(fields[self.FIELD_LABELS["consent"]]),
+                        "is_bvi": normalize_yes(fields[self.FIELD_LABELS["is_bvi"]]),
+                        "priority": to_int(fields[self.FIELD_LABELS["priority"]]) or 99,
                     }
                 )
 
