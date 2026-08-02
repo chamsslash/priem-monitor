@@ -192,6 +192,18 @@ CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "cache" / "stankin_r
 CACHE_TTL_SEC = 7200
 MAX_WORKERS = 6
 UNTRACKED_FALLBACK_PLACES = 30  # аппроксимация мест ТОЛЬКО для непрофильных untracked-программ каскада (вне охвата гарантии реальных мест)
+# Реальные места ОБЩЕГО КОНКУРСА (КЦП − особая − отдельная − целевая квота) по
+# отслеживаемым конкурсным группам, с priem.stankin.ru (training_programs +
+# страницы квот), 2026/2027, очная. Ключ — строка направления из каталога.
+# Живая nap-страница даёт полный КЦП с квотами (завышает), поэтому для
+# отслеживаемых групп берём эти официальные основные места напрямую.
+STANKIN_KCP_OVERRIDES: dict[str, int] = {
+    "09.03.04 Программная инженерия": 47,
+    "09.03.03.01 Математическое и компьютерное моделирование процессов и систем": 40,
+    "09.03.03.02 Управление данными": 57,
+    "09.03.01.01 Разработка программных комплексов": 19,
+    "09.03.02.01 Разработка и внедрение корпоративных информационных систем": 40,
+}
 # Доля упавших списков, после которой сбой считается массовым/системным
 # (троттлинг, авария сайта), а не единичным сетевым сбоем одного списка —
 # при превышении _fetch_all бросает исключение, чтобы build() откатился
@@ -301,7 +313,9 @@ class StankinFullPool:
             key = tracked_key[0] if tracked_key else direction
             tracked_id = tracked_key[1] if tracked_key else None
 
-            places = kcp_places.get(direction)
+            places = STANKIN_KCP_OVERRIDES.get(direction)
+            if places is None:
+                places = kcp_places.get(direction)
             if places is None:
                 if tracked_key:
                     configs = direction_groups[direction]
