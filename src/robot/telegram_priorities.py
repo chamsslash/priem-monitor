@@ -189,20 +189,21 @@ def try_parse_priority_command(
     if len(parts) < 2:
         return None
 
+    from .universities import SUPPORTED_UNIVERSITIES, match_university_prefix
+
     supported = supported_universities or set()
     university = default_university
     id_parts = parts[1:]
 
-    if parts[1] in supported:
-        university = parts[1]
-        id_parts = parts[2:]
+    matched, consumed = match_university_prefix(parts[1:], supported)
+    if matched is not None:
+        university = matched
+        id_parts = parts[1 + consumed :]
         if not id_parts:
             return university, []
 
     if not id_parts:
         return None
-
-    from .universities import SUPPORTED_UNIVERSITIES
 
     parser_name = SUPPORTED_UNIVERSITIES.get(university)
     if parser_name is None:

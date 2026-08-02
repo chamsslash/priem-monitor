@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from ..tracked_universities import TRACKED_UNIVERSITIES
 from .fa_pool import fetch_fa_full_pool
@@ -39,13 +39,29 @@ def fetch_university_pool(parser_name: str, *, use_cache: bool = True) -> tuple[
     return fetcher(use_cache=use_cache)
 
 
+def match_university_prefix(
+    tokens: list[str], names: Iterable[str] | None = None
+) -> tuple[str | None, int]:
+    """Ищет одно из названий вузов в начале tokens.
+
+    Название вуза может состоять из нескольких слов (например, «Финансовый
+    университет»), поэтому сравнение по одному токену не годится: пробуем
+    более длинные (многословные) имена раньше однословных.
+    Возвращает (каноническое имя или None, число потреблённых токенов).
+    """
+    candidates = names if names is not None else SUPPORTED_UNIVERSITIES
+    for name in sorted(candidates, key=lambda n: -len(n.split())):
+        words = name.split()
+        if tokens[: len(words)] == words:
+            return name, len(words)
+    return None, 0
+
+
 def parse_university_arg(parts: list[str], *, default: str | None = None) -> str | None:
     if len(parts) < 2:
         return default
-    candidate = parts[1]
-    if candidate in SUPPORTED_UNIVERSITIES:
-        return candidate
-    return default
+    matched, _ = match_university_prefix(parts[1:])
+    return matched if matched is not None else " ".join(parts[1:])
 
 
 def robot_ready_universities() -> list[str]:
@@ -57,12 +73,22 @@ def parse_robot_command(parts: list[str]) -> tuple[str | None, str | list[str]]:
     if len(parts) < 2:
         return None, "МИРЭА"
 
-    refresh = any(part.lower() in REFRESH_KEYWORDS for part in parts[1:])
-    universities = [part for part in parts[1:] if part in SUPPORTED_UNIVERSITIES]
+    tokens = [part for part in parts[1:] if part.lower() not in REFRESH_KEYWORDS]
+    refresh = len(tokens) != len(parts) - 1
 
     if refresh:
-        if not universities:
+        if not tokens:
             return "refresh", robot_ready_universities()
+        universities: list[str] = []
+        i = 0
+        while i < len(tokens):
+            matched, consumed = match_university_prefix(tokens[i:])
+            if matched is not None:
+                universities.append(matched)
+                i += consumed
+            else:
+                universities.append(tokens[i])
+                i += 1
         return "refresh", universities
 
     university = parse_university_arg(parts, default="МИРЭА") or "МИРЭА"
