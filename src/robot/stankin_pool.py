@@ -69,11 +69,12 @@ FETCH_RETRIES = 3
 RETRYABLE_STATUS = {500, 502, 503, 504}
 
 
-def _get(url: str, *, params: dict | None = None) -> requests.Response:
+def _get(url: str, *, params: dict | None = None, session: requests.Session | None = None) -> requests.Response:
+    getter = session.get if session is not None else requests.get
     last_error: Exception | None = None
     for attempt in range(FETCH_RETRIES):
         try:
-            response = requests.get(url, params=params, timeout=60)
+            response = getter(url, params=params, timeout=60)
             response.raise_for_status()
             return response
         except requests.HTTPError as exc:
@@ -97,16 +98,17 @@ _SEAT_PARAMS = {
 }
 
 
-def fetch_stankin_seats(direction: str) -> int | None:
+def fetch_stankin_seats(direction: str, *, session: requests.Session | None = None) -> int | None:
     """Живое число мест общего конкурса по направлению через kcp.php.
 
     Возвращает None при сетевом сбое или неожиданном ответе — вызывающий код
     откатывается на резерв (STANKIN_KCP_OVERRIDES). Не бросает исключений:
     провал сверки мест не должен ронять сборку всего пула.
     """
+    poster = session.post if session is not None else requests.post
     for attempt in range(FETCH_RETRIES):
         try:
-            response = requests.post(
+            response = poster(
                 SEATS_URL, data={**_SEAT_PARAMS, "PROPERTY_394": direction}, timeout=30
             )
             response.raise_for_status()
@@ -202,23 +204,27 @@ def _passing_cutoff(rows: list[dict]) -> int | None:
 
 def fetch_direction_rows(direction: str) -> list[dict]:
     rows: list[dict] = []
-    response = _get(LIST_URL, params={**BASE_PARAMS, "PROPERTY_394": direction})
-    for _ in range(MAX_PAGES):
-        soup = BeautifulSoup(response.text, "lxml")
-        rows.extend(_rows_from_table(soup))
+    # Один Session на всю пагинацию направления: страницы идут к тому же хосту
+    # подряд, соединение переиспользуется (без нового TCP+TLS на каждую). Session
+    # локальный для вызова, а вызов исполняется одним воркер-потоком → потокобезопасно.
+    with requests.Session() as session:
+        response = _get(LIST_URL, params={**BASE_PARAMS, "PROPERTY_394": direction}, session=session)
+        for _ in range(MAX_PAGES):
+            soup = BeautifulSoup(response.text, "lxml")
+            rows.extend(_rows_from_table(soup))
 
-        next_link = soup.find("a", class_="main-ui-pagination-next")
-        href = next_link.get("href") if next_link else None
-        if not href:
-            break
-        response = _get(urljoin(response.url, href))
-    else:
-        print(
-            f"ВНИМАНИЕ: пагинация СТАНКИНа для направления {direction!r} "
-            f"не завершилась естественно за MAX_PAGES={MAX_PAGES} страниц — "
-            "список мог быть обрезан.",
-            file=sys.stderr,
-        )
+            next_link = soup.find("a", class_="main-ui-pagination-next")
+            href = next_link.get("href") if next_link else None
+            if not href:
+                break
+            response = _get(urljoin(response.url, href), session=session)
+        else:
+            print(
+                f"ВНИМАНИЕ: пагинация СТАНКИНа для направления {direction!r} "
+                f"не завершилась естественно за MAX_PAGES={MAX_PAGES} страниц — "
+                "список мог быть обрезан.",
+                file=sys.stderr,
+            )
     return rows
 
 
@@ -379,12 +385,13 @@ class StankinFullPool:
         # грузить троттлящийся сайт лишними запросами. fetch_stankin_seats не
         # бросает исключений — провал по направлению просто откатит его на резерв.
         live_seats: dict[str, int] = {}
-        for direction in direction_groups:
-            if direction not in catalog_set:
-                continue
-            places = fetch_stankin_seats(direction)
-            if places is not None:
-                live_seats[direction] = places
+        with requests.Session() as seats_session:
+            for direction in direction_groups:
+                if direction not in catalog_set:
+                    continue
+                places = fetch_stankin_seats(direction, session=seats_session)
+                if places is not None:
+                    live_seats[direction] = places
 
         programs: list[RobotProgram] = []
         people: dict[str, RobotPerson] = {}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
@@ -40,6 +41,20 @@ FA_PLACES_OVERRIDES: dict[str, int] = {
     "Бизнес-информатика, Бакалавр, Цифровая трансформация управления бизнесом, Очная": 20,
     "Инноватика, Бакалавр, Управление цифровыми инновациями, Очная": 25,
 }
+
+
+_thread_local = threading.local()
+
+
+def _session() -> requests.Session:
+    """Thread-local Session: каждый воркер-поток переиспользует своё соединение
+    (без нового TCP+TLS на каждую страницу). Своя сессия на поток → потокобезопасно."""
+    session = getattr(_thread_local, "fa_session", None)
+    if session is None:
+        session = requests.Session()
+        session.headers.update({"User-Agent": USER_AGENT})
+        _thread_local.fa_session = session
+    return session
 
 
 def _is_bachelor_day_title(title: str) -> bool:
@@ -137,12 +152,7 @@ class FaFullPool:
         last_error: Exception | None = None
         for attempt in range(FETCH_RETRIES):
             try:
-                response = requests.get(
-                    LIST_URL,
-                    params=params,
-                    headers={"User-Agent": USER_AGENT},
-                    timeout=120,
-                )
+                response = _session().get(LIST_URL, params=params, timeout=120)
                 response.raise_for_status()
                 return response.text
             except requests.HTTPError as exc:
@@ -171,65 +181,72 @@ class FaFullPool:
         return sorted(catalog)
 
     def _fetch_all_rows(self, catalog: list[str]) -> list[dict]:
-        rows: list[dict] = []
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {executor.submit(self._fetch_program_rows, title): title for title in catalog}
-            for future in as_completed(futures):
-                rows.extend(future.result())
-        if not rows:
-            raise ValueError("Список абитуриентов Финуниверситета пуст")
-        return rows
+        all_rows: list[dict] = []
+        totals: dict[str, int] = {}
 
-    def _fetch_program_rows(self, title: str) -> list[dict]:
-        page = 1
-        total: int | None = None
+        # Фаза 1: первая страница каждой программы — строки + total (число абитуриентов).
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {executor.submit(self._fetch_page, title, 1): title for title in catalog}
+            for future in as_completed(futures):
+                title = futures[future]
+                rows, total = future.result()
+                all_rows.extend(rows)
+                totals[title] = total
+
+        # Фаза 2: все ОСТАЛЬНЫЕ страницы всех программ через один пул. Так огромная
+        # программа (напр. 6368 чел = 64 стр.) не висит последовательным «хвостом» —
+        # её страницы размазываются по воркерам вместе со всеми. page_size=100 не
+        # трогаем: fa.ru не уважает большие значения (на 500 отдаёт 20 → потеря данных).
+        tasks = [
+            (title, page)
+            for title, total in totals.items()
+            for page in range(2, (total + PAGE_SIZE - 1) // PAGE_SIZE + 1)
+        ]
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = [executor.submit(self._fetch_page, title, page) for title, page in tasks]
+            for future in as_completed(futures):
+                rows, _ = future.result()
+                all_rows.extend(rows)
+
+        if not all_rows:
+            raise ValueError("Список абитуриентов Финуниверситета пуст")
+        return all_rows
+
+    def _fetch_page(self, title: str, page: int) -> tuple[list[dict], int]:
+        """Одна страница программы: (строки, total). total парсится из ответа —
+        по нему считаем, сколько всего страниц у программы."""
+        html = self._get({**BASE_PARAMS, "facultet": title, "page": page, "page_size": PAGE_SIZE})
+        match = re.search(r"total:\s*(\d+)", html)
+        total = int(match.group(1)) if match else 0
+        return self._parse_rows(html, title), total
+
+    def _parse_rows(self, html: str, title: str) -> list[dict]:
+        soup = BeautifulSoup(html, "lxml")
         rows: list[dict] = []
-        while True:
-            html = self._get(
+        for row in soup.select("tbody tr"):
+            cells = row.find_all("td")
+            if not cells or not cells[0].get_text(strip=True).isdigit():
+                continue
+            fields = {(cell.get("data-label") or "").strip(): cell.get_text(" ", strip=True) for cell in cells}
+            for label in self.FIELD_LABELS.values():
+                if label not in fields:
+                    raise ValueError(f"На сайте ФА не найдена колонка {label!r} — вёрстка снова изменилась")
+            score = int(to_float(fields[self.FIELD_LABELS["score"]]) or 0)
+            if score <= 0:
+                continue
+            code = fields[self.FIELD_LABELS["code"]].strip()
+            if not code:
+                continue
+            rows.append(
                 {
-                    **BASE_PARAMS,
-                    "facultet": title,
-                    "page": page,
-                    "page_size": PAGE_SIZE,
+                    "code": code,
+                    "program_key": title,
+                    "score": score,
+                    "consent": normalize_yes(fields[self.FIELD_LABELS["consent"]]),
+                    "is_bvi": normalize_yes(fields[self.FIELD_LABELS["is_bvi"]]),
+                    "priority": to_int(fields[self.FIELD_LABELS["priority"]]) or 99,
                 }
             )
-            if total is None:
-                match = re.search(r"total:\s*(\d+)", html)
-                total = int(match.group(1)) if match else 0
-
-            soup = BeautifulSoup(html, "lxml")
-            page_rows = 0
-            for row in soup.select("tbody tr"):
-                cells = row.find_all("td")
-                if not cells or not cells[0].get_text(strip=True).isdigit():
-                    continue
-                page_rows += 1
-
-                fields = {(cell.get("data-label") or "").strip(): cell.get_text(" ", strip=True) for cell in cells}
-                for label in self.FIELD_LABELS.values():
-                    if label not in fields:
-                        raise ValueError(f"На сайте ФА не найдена колонка {label!r} — вёрстка снова изменилась")
-
-                score = int(to_float(fields[self.FIELD_LABELS["score"]]) or 0)
-                if score <= 0:
-                    continue
-                code = fields[self.FIELD_LABELS["code"]].strip()
-                if not code:
-                    continue
-                rows.append(
-                    {
-                        "code": code,
-                        "program_key": title,
-                        "score": score,
-                        "consent": normalize_yes(fields[self.FIELD_LABELS["consent"]]),
-                        "is_bvi": normalize_yes(fields[self.FIELD_LABELS["is_bvi"]]),
-                        "priority": to_int(fields[self.FIELD_LABELS["priority"]]) or 99,
-                    }
-                )
-
-            if page_rows == 0 or page * PAGE_SIZE >= total:
-                break
-            page += 1
         return rows
 
     @staticmethod
