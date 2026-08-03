@@ -188,6 +188,18 @@ def _rows_from_table(soup: BeautifulSoup) -> list[dict]:
     return result
 
 
+def _passing_cutoff(rows: list[dict]) -> int | None:
+    """Проходной балл среди согласных: мин. балл среди проходящих (top_passing=✓).
+
+    None — колонки «Высший проходной приоритет» не было в списке (нет оракула);
+    0 — среди согласных сюда никто не проходит (места открыты, проходит любой).
+    """
+    if not any(row.get("top_passing") is not None for row in rows):
+        return None
+    scores = [row["score"] for row in rows if row.get("top_passing") is True]
+    return min(scores) if scores else 0
+
+
 def fetch_direction_rows(direction: str) -> list[dict]:
     rows: list[dict] = []
     response = _get(LIST_URL, params={**BASE_PARAMS, "PROPERTY_394": direction})
@@ -392,15 +404,12 @@ class StankinFullPool:
                     budget_places=places,
                     tracked_id=tracked_id,
                     seat_source=seat_source,
+                    passing_cutoff=_passing_cutoff(rows_by_direction.get(direction, [])),
                 )
             )
 
             for row in rows_by_direction.get(direction, []):
-                choice = ProgramChoice(
-                    program_key=key,
-                    priority=row["priority"],
-                    site_passes_here=row.get("top_passing"),
-                )
+                choice = ProgramChoice(program_key=key, priority=row["priority"])
                 person = people.get(row["code"])
                 if person is None:
                     people[row["code"]] = RobotPerson(

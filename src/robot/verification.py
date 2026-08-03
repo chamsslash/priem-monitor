@@ -7,11 +7,15 @@
    (протухший хардкод). Это ловит ту боль, что кусала дважды: тихой подмены
    мест устаревшими числами больше не будет — сверка подсветит «из резерва».
 
-2. Прогноз (ВЫХОД робота) — сверка предсказанного роботом зачисления Димы с
-   вердиктом самого сайта. Оракул: СТАНКИН отдаёт колонку «Высший проходной
-   приоритет» — независимый ответ, робот его на входе НЕ использует, поэтому
-   сравнение честное. МЭИ сюда НЕ входит: там робот сам потребляет маркер
-   «другой КГ», и сверка была бы круговой (подтверждала бы собственный вход).
+2. Прогноз (ВЫХОД робота, пока только СТАНКИН) — сверка предсказанного роботом
+   зачисления Димы с фактическими проходными баллами среди СОГЛАСНЫХ на сайте.
+   Робот моделирует Диму так, будто он прямо сейчас подал согласие и стоит в
+   консент-пуле; оракул — реальный проходной балл среди согласных по каждому
+   направлению (мин. балл среди тех, кого сайт туда зачислил). Идём по приоритетам
+   робота и берём первое направление, где балл Димы этот порог перебивает — и
+   сравниваем с прогнозом. Не круговая: порог берётся из фактических зачислений
+   сайта (их движок), а робот считает своим каскадом на живых местах. МЭИ сюда
+   НЕ входит: там робот сам потребляет маркер «другой КГ», сверка была бы круговой.
 """
 
 from __future__ import annotations
@@ -31,28 +35,6 @@ logger = logging.getLogger(__name__)
 
 # Вузы, где сверка прогноза честная (независимый оракул сайта).
 PLACEMENT_VERIFIED_UNIVERSITIES = {"СТАНКИН"}
-
-
-def _dima_site_direction(raw_dima: RobotPerson | None) -> tuple[str | None, bool]:
-    """Вердикт сайта по Диме через колонку «Высший проходной приоритет».
-
-    Возвращает (program_key, куда сайт селит Диму | None; есть ли оракул).
-    «Есть оракул» = хоть у одной выборки Димы site_passes_here заполнен (не None).
-    Если оракул есть, но ни одна не True — сайт считает, что Дима не проходит
-    ни на одно из отслеживаемых направлений (site_key = None, но оракул есть).
-    """
-    if raw_dima is None:
-        return None, False
-    have_oracle = any(choice.site_passes_here is not None for choice in raw_dima.choices)
-    if not have_oracle:
-        return None, False
-    passing = [choice for choice in raw_dima.choices if choice.site_passes_here]
-    if not passing:
-        return None, True
-    # Ровно одно направление должно быть «высшим проходным»; если сайт отметил
-    # несколько — берём по наивысшему приоритету (наименьший priority).
-    best = min(passing, key=lambda choice: choice.priority)
-    return best.program_key, True
 
 
 def _title_for_key(programs: list[RobotProgram], key: str | None) -> str | None:
@@ -75,17 +57,6 @@ def _priority_keys(person: RobotPerson | None) -> list[str]:
     return keys
 
 
-def _robot_uses_real_priorities(raw_dima: RobotPerson | None, sim_dima: RobotPerson | None) -> bool:
-    """True, если робот гонялся ровно на реально поданных Димой приоритетах.
-
-    Сайт считает «Основной высший приоритет» по фактически поданному списку и
-    порядку. Если робот запущен на других (гипотетических) приоритетах, вердикт
-    сайта несопоставим с прогнозом — строгую сверку в этом случае не проводим.
-    """
-    real = _priority_keys(raw_dima)
-    return bool(real) and _priority_keys(sim_dima) == real
-
-
 def _build_seat_checks(
     result: RobotSimulationResult, programs: list[RobotProgram]
 ) -> list[SeatCheck]:
@@ -105,11 +76,25 @@ def _build_seat_checks(
     return checks
 
 
+def _site_placement(
+    programs: list[RobotProgram], sim_dima: RobotPerson | None, dima_score: int
+) -> str | None:
+    """Куда сайт-порог селит Диму: первое по приоритету направление, где его балл
+    перебивает реальный проходной среди согласных."""
+    cutoff_by_key = {program.key: program.passing_cutoff for program in programs}
+    for key in _priority_keys(sim_dima):
+        cutoff = cutoff_by_key.get(key)
+        if cutoff is None:
+            continue
+        if dima_score >= cutoff:
+            return key
+    return None
+
+
 def _build_placement_check(
     university: str,
     result: RobotSimulationResult,
     programs: list[RobotProgram],
-    raw_dima: RobotPerson | None,
     sim_dima: RobotPerson | None,
 ) -> PlacementCheck | None:
     if university not in PLACEMENT_VERIFIED_UNIVERSITIES:
@@ -117,35 +102,18 @@ def _build_placement_check(
     robot_key = result.dima_placed_program_key
     robot_title = result.dima_placed_title or _title_for_key(programs, robot_key)
 
-    # Гейт по согласию: сайт отмечает «Высший проходной приоритет» только у
-    # подавших согласие, а робот моделирует зачисление именно среди подавших.
-    # Если согласия нет — оракул по этому человеку пуст, сверять нечего.
-    if raw_dima is None or not raw_dima.consent:
+    # Нет ни одного проходного балла (колонки не было) — сверять не с чем.
+    if all(program.passing_cutoff is None for program in programs):
         return PlacementCheck(
-            status="no_consent",
+            status="unavailable",
             robot_key=robot_key,
             robot_title=robot_title,
             site_key=None,
             site_title=None,
         )
 
-    # Строгую сверку проводим только на реально поданных приоритетах (см. гейт).
-    if not _robot_uses_real_priorities(raw_dima, sim_dima):
-        return PlacementCheck(
-            status="hypothetical",
-            robot_key=robot_key,
-            robot_title=robot_title,
-            site_key=None,
-            site_title=None,
-        )
-
-    site_key, have_oracle = _dima_site_direction(raw_dima)
-    if not have_oracle:
-        status = "unavailable"
-    elif robot_key == site_key:
-        status = "match"
-    else:
-        status = "mismatch"
+    site_key = _site_placement(programs, sim_dima, result.dima_score)
+    status = "match" if robot_key == site_key else "mismatch"
     return PlacementCheck(
         status=status,
         robot_key=robot_key,
@@ -165,7 +133,7 @@ def _log_report(report: VerificationReport) -> None:
     placement = report.placement
     if placement is not None and placement.status == "mismatch":
         logger.warning(
-            "[сверка %s] расхождение прогноза: робот → %s, сайт → %s",
+            "[сверка %s] расхождение прогноза: робот → %s, сайт-порог → %s",
             report.university,
             placement.robot_title or "не проходит",
             placement.site_title or "не проходит",
@@ -184,13 +152,12 @@ def build_verification_report(
     result: RobotSimulationResult,
     programs: list[RobotProgram],
     *,
-    raw_dima: RobotPerson | None,
     sim_dima: RobotPerson | None,
 ) -> VerificationReport:
     report = VerificationReport(
         university=university,
         seats=_build_seat_checks(result, programs),
-        placement=_build_placement_check(university, result, programs, raw_dima, sim_dima),
+        placement=_build_placement_check(university, result, programs, sim_dima),
     )
     _log_report(report)
     return report

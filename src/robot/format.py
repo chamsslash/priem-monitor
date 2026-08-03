@@ -90,23 +90,13 @@ def _format_verification(report: VerificationReport | None) -> list[str]:
     if placement is not None:
         if placement.status == "match":
             where = placement.site_title or placement.robot_title or "—"
-            lines.append(f"Прогноз: ✅ совпал с сайтом ({where})")
+            lines.append(f"Прогноз: ✅ сходится с проходными сайта ({where})")
         elif placement.status == "mismatch":
             robot = placement.robot_title or "не проходит"
             site = placement.site_title or "не проходит"
-            lines.append(f"⚠️ Прогноз расходится: робот → {robot}, сайт → {site}")
-        elif placement.status == "hypothetical":
-            lines.append(
-                "ℹ️ Прогноз на заданных приоритетах — сайт считает по реально "
-                "поданным, сверка не проводится"
-            )
-        elif placement.status == "no_consent":
-            lines.append(
-                "ℹ️ Прогноз: сверка недоступна — сайт даёт проходной только по "
-                "подавшим согласие (у вас не подано)"
-            )
+            lines.append(f"⚠️ Прогноз расходится: робот → {robot}, сайт-порог → {site}")
         else:  # unavailable
-            lines.append("ℹ️ Прогноз: сайт сейчас не даёт вердикт — не сверить")
+            lines.append("ℹ️ Прогноз: нет проходных баллов на сайте — не сверить")
     return lines
 
 
