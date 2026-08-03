@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from ..config_loader import load_programs
 from .direction_keys import okso_code_for_program
-from .models import CompetitorBeforeDima, RobotSimulationResult
+from .models import CompetitorBeforeDima, RobotSimulationResult, VerificationReport
 
 
 def _okso_by_tracked_id() -> dict[int, str]:
@@ -72,6 +72,44 @@ def _format_competitor(item: CompetitorBeforeDima) -> list[str]:
     return lines
 
 
+def _format_verification(report: VerificationReport | None) -> list[str]:
+    if report is None:
+        return []
+    lines = ["", "— Сверка с сайтом —"]
+
+    fallback = report.fallback_seats
+    if not report.seats:
+        pass
+    elif not fallback:
+        lines.append("Места: сверено вживую ✅")
+    else:
+        names = ", ".join(f"{check.title} ({check.budget_places})" for check in fallback)
+        lines.append(f"⚠️ Места из резерва (сайт не ответил): {names}")
+
+    placement = report.placement
+    if placement is not None:
+        if placement.status == "match":
+            where = placement.site_title or placement.robot_title or "—"
+            lines.append(f"Прогноз: ✅ совпал с сайтом ({where})")
+        elif placement.status == "mismatch":
+            robot = placement.robot_title or "не проходит"
+            site = placement.site_title or "не проходит"
+            lines.append(f"⚠️ Прогноз расходится: робот → {robot}, сайт → {site}")
+        elif placement.status == "hypothetical":
+            lines.append(
+                "ℹ️ Прогноз на заданных приоритетах — сайт считает по реально "
+                "поданным, сверка не проводится"
+            )
+        elif placement.status == "no_consent":
+            lines.append(
+                "ℹ️ Прогноз: сверка недоступна — сайт даёт проходной только по "
+                "подавшим согласие (у вас не подано)"
+            )
+        else:  # unavailable
+            lines.append("ℹ️ Прогноз: сайт сейчас не даёт вердикт — не сверить")
+    return lines
+
+
 def format_robot_result(result: RobotSimulationResult) -> str:
     if result.error:
         if "не найден в списках вуза" in result.error:
@@ -121,6 +159,8 @@ def format_robot_result(result: RobotSimulationResult) -> str:
         via = "БВИ" if result.dima_placed_via == "bvi" else "общий конкурс"
         lines.append(f"→ Зачислится: {result.dima_placed_title or ''}")
         lines.append(f"  {result.dima_priority_used}-й приоритет · этап: {via}")
+
+    lines.extend(_format_verification(result.verification))
 
     if result.dima_competitors_by_program:
         lines.append("")

@@ -259,15 +259,25 @@ class MpeiFullPool:
         for title, list_id in catalog:
             tracked_program = tracked.get(list_id)
             key = str(tracked_program.id) if tracked_program else list_id
+            # Провенанс: живые «вакантные места» со страницы волны — это источник
+            # по умолчанию. Резерв (config/аппроксимация) — только если сайт не
+            # отдал число (тогда сверка мест подсветит «из резерва»).
             places = vacant_by_list.get(list_id)
-            if places is None:
-                places = (tracked_program.budget_places or None) if tracked_program else UNTRACKED_FALLBACK_PLACES
+            if places is not None:
+                seat_source = "live"
+            elif tracked_program:
+                places = tracked_program.budget_places or None
+                seat_source = "config"
+            else:
+                places = UNTRACKED_FALLBACK_PLACES
+                seat_source = "approx"
             raw_programs.append(
                 RobotProgram(
                     key=key,
                     title=title,
                     budget_places=places,
                     tracked_id=tracked_program.id if tracked_program else None,
+                    seat_source=seat_source,
                 )
             )
             for row in rows_by_list.get(list_id, []):

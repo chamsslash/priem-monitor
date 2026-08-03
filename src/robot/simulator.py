@@ -16,6 +16,7 @@ from .models import (
     RobotSimulationResult,
 )
 from .universities import SUPPORTED_UNIVERSITIES, fetch_university_pool
+from .verification import build_verification_report
 
 
 def _find_dima_in_pool(people: list[RobotPerson], list_code: str) -> RobotPerson | None:
@@ -458,6 +459,12 @@ def run_robot_simulation(
         empty.error = str(exc)
         return empty
 
+    # Сырая строка Димы из пула — с нетронутым оракулом сайта (site_passes_here).
+    # Берём ДО перестройки people ниже: _apply_priority_order пересобирает выборы
+    # Димы и теряет маркеры, поэтому для сверки прогноза нужен именно исходный ряд.
+    dima_list_code = university_cfg.get("dima_list_code")
+    raw_dima = _find_dima_in_pool(people, str(dima_list_code)) if dima_list_code else None
+
     if dima_in_pool:
         people = [
             RobotPerson(
@@ -503,4 +510,8 @@ def run_robot_simulation(
             snapshot.title = display_titles[snapshot.program_key]
     if result.dima_placed_program_key in display_titles:
         result.dima_placed_title = display_titles[result.dima_placed_program_key]
+
+    result.verification = build_verification_report(
+        university, result, programs, raw_dima=raw_dima, sim_dima=dima
+    )
     return result

@@ -21,6 +21,11 @@ from .models import ProgramChoice, RobotPerson, RobotProgram
 CATALOG_PAGE_URL = "https://priem.stankin.ru/bakalavriatispetsialitet/ranked-lists/"
 LIST_URL = "https://priem.stankin.ru/gridspisokpostupayushchikh"
 NAP_URL_TEMPLATE = "https://priem.stankin.ru/bakalavriatispetsialitet/nap/{code}/"
+# Живой эндпоинт «Количество мест на выбранный конкурс» со страницы ranked-lists:
+# на POST с направлением отдаёт {"KTSP":"58"} — это места ОБЩЕГО КОНКУРСА
+# («Основной бюджет» = КЦП минус особая/отдельная/целевая квоты), ровно то, что
+# симулирует робот. Заменяет захардкоженный STANKIN_KCP_OVERRIDES живым числом.
+SEATS_URL = "https://priem.stankin.ru/local/apps/pk.lists/kcp.php"
 
 BASE_PARAMS = {
     "PROPERTY_388": "Бюджетная основа",
@@ -85,6 +90,36 @@ def _get(url: str, *, params: dict | None = None) -> requests.Response:
     raise last_error or RuntimeError(f"Не удалось загрузить {url}")
 
 
+_SEAT_PARAMS = {
+    "PROPERTY_388": "Бюджетная основа",
+    "PROPERTY_389": "1 - Очная",
+    "EDU_LEVEL": "bs",
+}
+
+
+def fetch_stankin_seats(direction: str) -> int | None:
+    """Живое число мест общего конкурса по направлению через kcp.php.
+
+    Возвращает None при сетевом сбое или неожиданном ответе — вызывающий код
+    откатывается на резерв (STANKIN_KCP_OVERRIDES). Не бросает исключений:
+    провал сверки мест не должен ронять сборку всего пула.
+    """
+    for attempt in range(FETCH_RETRIES):
+        try:
+            response = requests.post(
+                SEATS_URL, data={**_SEAT_PARAMS, "PROPERTY_394": direction}, timeout=30
+            )
+            response.raise_for_status()
+            value = response.json().get("KTSP")
+            places = int(str(value).strip())
+            return places if places > 0 else None
+        except (requests.RequestException, ValueError, TypeError, AttributeError):
+            if attempt < FETCH_RETRIES - 1:
+                continue
+            return None
+    return None
+
+
 def fetch_catalog() -> list[str]:
     try:
         response = _get(CATALOG_PAGE_URL)
@@ -116,6 +151,15 @@ def _rows_from_table(soup: BeautifulSoup) -> list[dict]:
     priority_idx = header_index(headers, "приоритет")
     if None in (code_idx, score_idx, consent_idx, priority_idx):
         raise ValueError("Не удалось определить колонки списка СТАНКИНа")
+    # Оракул сайта: колонка «Высший проходной приоритет» (PROPERTY_710) — ✓ у тех,
+    # кто РЕАЛЬНО зачисляется сюда по высшему приоритету С УЧЁТОМ согласия. Именно
+    # она семантически совпадает с роботом (require_consent=True: место берут
+    # только подавшие согласие). НЕ берём «Основной высший приоритет» (PROPERTY_711):
+    # та консент-НЕзависимая (чистый ранг) и мерила бы другой вопрос. У абитуриента
+    # без согласия колонка пуста на всех направлениях — поэтому по нему сверку
+    # прогноза не проводим (см. verification: гейт по согласию). Может отсутствовать
+    # (top_idx = None → сверка прогноза недоступна).
+    top_idx = header_index(headers, "высший проходной приоритет")
 
     result: list[dict] = []
     for row in rows[1:]:
@@ -128,12 +172,17 @@ def _rows_from_table(soup: BeautifulSoup) -> list[dict]:
         code = cells[code_idx].strip()
         if not code:
             continue
+        if top_idx is not None and top_idx < len(cells):
+            top_passing: bool | None = normalize_yes(cells[top_idx])
+        else:
+            top_passing = None
         result.append(
             {
                 "code": code,
                 "score": score,
                 "consent": normalize_yes(cells[consent_idx]),
                 "priority": to_int(cells[priority_idx]) or 99,
+                "top_passing": top_passing,
             }
         )
     return result
@@ -312,6 +361,19 @@ class StankinFullPool:
                     file=sys.stderr,
                 )
 
+        # Живые места общего конкурса для отслеживаемых направлений (kcp.php).
+        # Тянем только по отслеживаемым — по ним гарантируем точное число;
+        # непрофильные untracked остаются на прежней аппроксимации, чтобы не
+        # грузить троттлящийся сайт лишними запросами. fetch_stankin_seats не
+        # бросает исключений — провал по направлению просто откатит его на резерв.
+        live_seats: dict[str, int] = {}
+        for direction in direction_groups:
+            if direction not in catalog_set:
+                continue
+            places = fetch_stankin_seats(direction)
+            if places is not None:
+                live_seats[direction] = places
+
         programs: list[RobotProgram] = []
         people: dict[str, RobotPerson] = {}
         for direction in catalog:
@@ -319,31 +381,26 @@ class StankinFullPool:
             key = tracked_key[0] if tracked_key else direction
             tracked_id = tracked_key[1] if tracked_key else None
 
-            places = STANKIN_KCP_OVERRIDES.get(direction)
-            if places is None:
-                places = kcp_places.get(direction)
-            if places is None:
-                if tracked_key:
-                    configs = direction_groups[direction]
-                    places = sum(p.budget_places for p in configs)
-                    if len(configs) > 1:
-                        breakdown = "+".join(
-                            str(p.budget_places) for p in sorted(configs, key=lambda p: p.id)
-                        )
-                        print(
-                            f"ВНИМАНИЕ: для смёрженной пары СТАНКИНа {direction!r} "
-                            f"(ключ {key!r}) официальный КЦП не найден — используется "
-                            f"fallback-сумма квот профилей из конфига {breakdown}={places}, "
-                            "которая может завышать реальное общее число бюджетных мест.",
-                            file=sys.stderr,
-                        )
-                else:
-                    places = UNTRACKED_FALLBACK_PLACES
+            places, seat_source = self._resolve_places(
+                direction, tracked_key, direction_groups, live_seats, kcp_places
+            )
 
-            programs.append(RobotProgram(key=key, title=direction, budget_places=places, tracked_id=tracked_id))
+            programs.append(
+                RobotProgram(
+                    key=key,
+                    title=direction,
+                    budget_places=places,
+                    tracked_id=tracked_id,
+                    seat_source=seat_source,
+                )
+            )
 
             for row in rows_by_direction.get(direction, []):
-                choice = ProgramChoice(program_key=key, priority=row["priority"])
+                choice = ProgramChoice(
+                    program_key=key,
+                    priority=row["priority"],
+                    site_passes_here=row.get("top_passing"),
+                )
                 person = people.get(row["code"])
                 if person is None:
                     people[row["code"]] = RobotPerson(
@@ -354,6 +411,47 @@ class StankinFullPool:
                 person.consent = person.consent or row["consent"]
                 person.choices.append(choice)
         return list(people.values()), programs
+
+    @staticmethod
+    def _resolve_places(
+        direction: str,
+        tracked_key: tuple[str, int] | None,
+        direction_groups: dict[str, list[ProgramConfig]],
+        live_seats: dict[str, int],
+        kcp_places: dict[str, int],
+    ) -> tuple[int | None, str]:
+        """Число мест + провенанс. Отслеживаемые: живьём → резерв → nap → конфиг.
+        Непрофильные: nap → грубая аппроксимация."""
+        if tracked_key is not None:
+            if direction in live_seats:
+                return live_seats[direction], "live"
+            override = STANKIN_KCP_OVERRIDES.get(direction)
+            if override is not None:
+                print(
+                    f"ВНИМАНИЕ: живое число мест СТАНКИНа по {direction!r} недоступно "
+                    f"(kcp.php не ответил) — взят захардкоженный резерв "
+                    f"STANKIN_KCP_OVERRIDES={override}. Число может протухнуть; проверь, "
+                    "отвечает ли сайт.",
+                    file=sys.stderr,
+                )
+                return override, "fallback"
+            nap = kcp_places.get(direction)
+            if nap is not None:
+                return nap, "nap"
+            configs = direction_groups[direction]
+            total = sum(p.budget_places for p in configs)
+            breakdown = "+".join(str(p.budget_places) for p in sorted(configs, key=lambda p: p.id))
+            print(
+                f"ВНИМАНИЕ: для СТАНКИНа {direction!r} нет ни живого числа, ни резерва, ни "
+                f"nap — используется сумма квот профилей из конфига {breakdown}={total}, "
+                "которая может завышать реальное число мест общего конкурса.",
+                file=sys.stderr,
+            )
+            return total, "config"
+        nap = kcp_places.get(direction)
+        if nap is not None:
+            return nap, "nap"
+        return UNTRACKED_FALLBACK_PLACES, "approx"
 
     def _load_cache(self, *, ignore_ttl: bool = False):
         if not CACHE_PATH.exists():

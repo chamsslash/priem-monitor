@@ -15,6 +15,13 @@ class ProgramChoice:
     # занять им место здесь — это место уже учтено как свободное в живом
     # budget_places с сайта.
     enrolls_elsewhere: bool = False
+    # Вердикт САЙТА по этому человеку на этом направлении: колонка «Высший
+    # проходной приоритет» (PROPERTY_710, пока только СТАНКИН). True — сайт считает,
+    # что он реально зачисляется сюда по высшему приоритету С УЧЁТОМ согласия;
+    # False — не проходит (или согласие не подано → пусто); None — колонки нет
+    # (другой вуз/стадия). Робот эту величину НЕ использует в каскаде — она
+    # нужна только как независимый оракул для сверки прогноза (см. verification).
+    site_passes_here: bool | None = None
 
 
 @dataclass
@@ -50,6 +57,14 @@ class RobotProgram:
     title: str
     budget_places: int | None
     tracked_id: int | None = None
+    # Откуда взято budget_places (провенанс). Нужно, чтобы сверка мест
+    # отличала живое число от аварийного резерва:
+    #   "live"     — снято живьём с сайта (СТАНКИН kcp.php / МЭИ вакантные места)
+    #   "fallback" — захардкоженный резерв (STANKIN_KCP_OVERRIDES) — сайт не ответил
+    #   "nap"      — nap-страница СТАНКИНа (полный КЦП, завышает)
+    #   "config"   — число из config/programs.json
+    #   "approx"   — грубая аппроксимация для непрофильных untracked-направлений
+    seat_source: str | None = None
 
 
 @dataclass
@@ -98,6 +113,57 @@ class DimaPrioritySnapshot:
 
 
 @dataclass
+class SeatCheck:
+    """Сверка числа мест по одному направлению: живьём или из резерва."""
+
+    program_key: str
+    title: str
+    tracked_id: int | None
+    budget_places: int | None
+    seat_source: str | None
+
+    @property
+    def is_live(self) -> bool:
+        return self.seat_source == "live"
+
+
+@dataclass
+class PlacementCheck:
+    """Сверка прогноза робота с вердиктом самого сайта по Диме (СТАНКИН)."""
+
+    # status:
+    #   "match"        — робот и сайт указывают одно направление
+    #   "mismatch"     — расходятся (робот → одно, сайт → другое/никуда)
+    #   "unavailable"  — сайт сейчас не даёт вердикта (колонки/маркера нет)
+    #   "no_consent"   — согласие не подано: сайт считает «проходной» только по
+    #                    подавшим согласие, робот моделирует зачисление среди них —
+    #                    без согласия сверять нечего (для Димы сейчас именно это)
+    #   "hypothetical" — робот считает по ЗАДАННЫМ приоритетам, а не по реально
+    #                    поданным Димой; сайт считает по реальным → не сопоставимо,
+    #                    строгую сверку не проводим (только когда приоритеты совпали)
+    status: str
+    robot_key: str | None
+    robot_title: str | None
+    site_key: str | None
+    site_title: str | None
+
+
+@dataclass
+class VerificationReport:
+    university: str
+    seats: list[SeatCheck] = field(default_factory=list)
+    placement: PlacementCheck | None = None
+
+    @property
+    def fallback_seats(self) -> list[SeatCheck]:
+        return [check for check in self.seats if not check.is_live]
+
+    @property
+    def all_seats_live(self) -> bool:
+        return bool(self.seats) and all(check.is_live for check in self.seats)
+
+
+@dataclass
 class RobotSimulationResult:
     university: str
     total_people: int
@@ -121,3 +187,4 @@ class RobotSimulationResult:
     from_cache: bool = False
     fetched_at: str | None = None
     error: str | None = None
+    verification: VerificationReport | None = None
