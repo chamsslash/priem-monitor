@@ -160,8 +160,9 @@ def _rows_and_vacant_from_bacc(html: str) -> tuple[list[dict], int | None]:
         cells = _expand_row_cells(row)
         if len(cells) <= max(code_idx, score_idx, consent_idx, priority_idx):
             continue
-        if note_idx is not None and note_idx < len(cells) and "другой КГ" in cells[note_idx]:
-            continue
+        enrolls_elsewhere = bool(
+            note_idx is not None and note_idx < len(cells) and "другой КГ" in cells[note_idx]
+        )
         score = to_int(cells[score_idx])
         if not score or score <= 0:
             continue
@@ -174,6 +175,7 @@ def _rows_and_vacant_from_bacc(html: str) -> tuple[list[dict], int | None]:
                 "score": score,
                 "consent": normalize_yes(cells[consent_idx]),
                 "priority": to_int(cells[priority_idx]) or 99,
+                "enrolls_elsewhere": enrolls_elsewhere,
             }
         )
     return result, vacant
@@ -269,7 +271,11 @@ class MpeiFullPool:
                 )
             )
             for row in rows_by_list.get(list_id, []):
-                choice = ProgramChoice(program_key=key, priority=row["priority"])
+                choice = ProgramChoice(
+                    program_key=key,
+                    priority=row["priority"],
+                    enrolls_elsewhere=row["enrolls_elsewhere"],
+                )
                 person = people.get(row["code"])
                 if person is None:
                     people[row["code"]] = RobotPerson(

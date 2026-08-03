@@ -8,6 +8,13 @@ class ProgramChoice:
     program_key: str
     priority: int
     is_bvi: bool = False
+    # Сайт вуза уже определил, что этот человек зачислится по ДРУГОЙ
+    # конкурсной группе (пометка «Зачисляется в другой КГ»), несмотря на
+    # присутствие в этом списке. Выбор сохраняется (чтобы Димины реальные
+    # приоритеты не пропадали из отображения), но каскад не должен пытаться
+    # занять им место здесь — это место уже учтено как свободное в живом
+    # budget_places с сайта.
+    enrolls_elsewhere: bool = False
 
 
 @dataclass
@@ -24,6 +31,8 @@ class RobotPerson:
         result: list[str] = []
         for choice in ordered:
             if choice.program_key in seen:
+                continue
+            if choice.enrolls_elsewhere:
                 continue
             if phase == "bvi" and not choice.is_bvi:
                 continue
