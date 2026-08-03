@@ -23,6 +23,12 @@ def main() -> None:
         print("Экспортирован config/programs.json")
 
     programs = load_programs()
+    # Временно отключено: сервер mospolytech.ru не досылает промежуточный TLS-
+    # сертификат (подтверждено live через openssl s_client -showcerts — шлют
+    # только листовой сертификат), из-за чего все профили стабильно валятся с
+    # SSLCertVerificationError каждый цикл обновления. Проблема на их стороне,
+    # не в коде. Вернуть — убрать этот фильтр, когда цепочку сертификатов починят.
+    programs = [p for p in programs if p.parser != "mospolytech"]
     rows = refresh_all(programs)
     ok = [row for row in rows if not row.error]
     failed = [row for row in rows if row.error]
