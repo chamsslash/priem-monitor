@@ -11,8 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.run_update import UpdateStatus, run_update
-from src.service import load_results
 from src.telegram_api import (
     TelegramAPIError,
     answer_callback_query,
@@ -24,8 +22,6 @@ from src.telegram_api import (
     send_message,
 )
 from src.telegram_config import load_telegram_config
-from src.telegram_format import format_push_message
-from src.telegram_notify import send_status, send_to_chats, send_university_report
 
 LOG_PATH = ROOT / "logs" / "telegram_bot.log"
 OFFSET_PATH = ROOT / "logs" / "telegram_offset.json"
@@ -55,7 +51,6 @@ def _welcome(chat_id: int) -> str:
         header
         + "Команды:\n"
         "/статус — ваш статус по 4 вузам (Финуниверситет, МИРЭА, МЭИ, СТАНКИН)\n"
-        "/обновить — загрузить свежие списки\n"
         "/робот [вуз] — подробная симуляция зачисления по одному вузу\n"
         "/робот обновить [вуз] — обновить кэш списков робота\n"
         "/конкуренты [вуз] <код> — кто впереди вас по направлению (код см. в /робот)\n"
@@ -73,7 +68,6 @@ def _help_text() -> str:
     return (
         "Доступные команды:\n"
         "/статус — общая сводка и меню выбора вуза\n"
-        "/обновить — запустить парсинг (работает, пока включён Mac)\n"
         f"/робот [{supported}] — симуляция робота зачисления\n"
         f"/робот обновить [{supported}] — обновить кэш списков робота (сейчас: {ready})\n"
         f"/конкуренты [{supported}] <код> — кто впереди вас по направлению (код см. в /робот)\n"
@@ -605,27 +599,16 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             send_message(config.bot_token, chat_id, f"Ошибка: {exc}", reply_to=message_id)
         return
 
-    if command in {"/обновить", "/update"}:
-        send_message(config.bot_token, chat_id, "Запускаю обновление… Это может занять 1–2 минуты.", reply_to=message_id)
-        old_results = load_results()
-        result = run_update()
-        if result.status == UpdateStatus.ALREADY_RUNNING:
-            send_message(config.bot_token, chat_id, result.message, reply_to=message_id)
-            return
-        if result.status != UpdateStatus.SUCCESS:
-            send_message(config.bot_token, chat_id, f"Ошибка обновления:\n{result.message}", reply_to=message_id)
-            return
-
-        new_results = load_results()
-        send_to_chats(config, format_push_message(old_results, new_results), chat_id=chat_id)
-        return
-
     send_message(config.bot_token, chat_id, "Неизвестная команда. Напишите /help", reply_to=message_id)
 
 
-def _prewarm_robot_pools() -> None:
-    """Прогрев пулов всех роботов в фоне после старта бота — чтобы первый /робот
-    или /статус не висел на многоминутном крауле. use_cache=True: свежий кэш (<TTL)
+# Период фонового прогрева робот-пулов. Совпадает с TTL кэша (~2 часа): после сна
+# кэш протухает и на следующем витке пересобирается, оставаясь всегда свежим.
+ROBOT_REFRESH_INTERVAL_SEC = 7200
+
+
+def _prewarm_robot_pools_once() -> None:
+    """Один проход прогрева всех пулов роботов. use_cache=True: свежий кэш (<TTL)
     берётся как есть без перекраула, собирается только протухшее/пустое. Best-effort:
     сбой одного вуза логируется и не мешает остальным и опросу Telegram."""
     from src.robot.universities import (
@@ -651,6 +634,15 @@ def _prewarm_robot_pools() -> None:
     logger.info("Прогрев роботов завершён")
 
 
+def _robot_pool_refresh_loop() -> None:
+    """Прогрев при старте и далее каждые ~2ч. После сна кэш протухает (age > TTL),
+    поэтому use_cache=True на следующем витке его пересобирает — кэш держится свежим,
+    а недавно использованные командой пулы зря не перекраулятся."""
+    while True:
+        _prewarm_robot_pools_once()
+        time.sleep(ROBOT_REFRESH_INTERVAL_SEC)
+
+
 def main() -> int:
     config = load_telegram_config()
     if not config:
@@ -660,8 +652,9 @@ def main() -> int:
     offset = load_offset(OFFSET_PATH)
     logger.info("Бот запущен. offset=%s", offset)
 
-    # Прогрев роботов в фоне: бот сразу опрашивает Telegram, пулы догреваются рядом.
-    threading.Thread(target=_prewarm_robot_pools, name="prewarm-robots", daemon=True).start()
+    # Прогрев роботов в фоне при старте и далее каждые ~2ч: бот сразу опрашивает
+    # Telegram, а пулы догреваются рядом и держатся свежими.
+    threading.Thread(target=_robot_pool_refresh_loop, name="robot-pool-refresh", daemon=True).start()
 
     while True:
         try:

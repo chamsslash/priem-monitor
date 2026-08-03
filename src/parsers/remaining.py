@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 
 import requests
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
 
 from ..models import Applicant, ProgramConfig, ProgramResult
 from .base import BaseParser
@@ -263,6 +262,10 @@ class RanepaParser(BaseParser):
 
     @classmethod
     def _fetch_page_html(cls, url: str) -> str:
+        # Ленивый импорт: playwright нужен только РАНХиГС-парсеру (не в роботе),
+        # чтобы образ бота не тащил тяжёлый chromium. Держим импорт внутри метода.
+        from playwright.sync_api import sync_playwright
+
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
