@@ -16,7 +16,6 @@ SUPPORTED_UNIVERSITIES: dict[str, str] = {
     "МЭИ": "mpei",
     "МИРЭА": "mirea",
     "СТАНКИН": "stankin",
-    "Московский политех": "mospolytech",
 }
 
 if set(SUPPORTED_UNIVERSITIES) != set(TRACKED_UNIVERSITIES):
