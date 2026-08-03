@@ -5,6 +5,7 @@ import logging
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -430,23 +431,29 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                         reply_to=message_id,
                     )
 
-                messages: list[str] = []
-                for university in universities:
+                # Вузы обновляем ПАРАЛЛЕЛЬНО (каждый — свой сайт), порядок сообщений
+                # сохраняем как в запросе. ValueError по вузу → строка-предупреждение.
+                def _refresh_one(university: str) -> str:
                     parser_name = SUPPORTED_UNIVERSITIES[university]
                     try:
                         people, programs, fetched_at, _ = fetch_university_pool(parser_name, use_cache=False)
                     except ValueError as exc:
-                        messages.append(f"⚠️ {university}: {exc}")
-                        continue
-                    messages.append(
-                        format_robot_cache_refresh(
-                            university,
-                            fetched_at=fetched_at,
-                            people_count=len(people),
-                            programs_count=len(programs),
-                        )
+                        return f"⚠️ {university}: {exc}"
+                    return format_robot_cache_refresh(
+                        university,
+                        fetched_at=fetched_at,
+                        people_count=len(people),
+                        programs_count=len(programs),
                     )
-                send_message(config.bot_token, chat_id, "\n\n".join(messages), reply_to=message_id)
+
+                with ThreadPoolExecutor(max_workers=max(len(universities), 1)) as executor:
+                    by_university = dict(zip(universities, executor.map(_refresh_one, universities)))
+                send_message(
+                    config.bot_token,
+                    chat_id,
+                    "\n\n".join(by_university[u] for u in universities),
+                    reply_to=message_id,
+                )
                 return
 
             university = target if isinstance(target, str) else "МИРЭА"
@@ -608,29 +615,41 @@ ROBOT_REFRESH_INTERVAL_SEC = 7200
 
 
 def _prewarm_robot_pools_once() -> None:
-    """Один проход прогрева всех пулов роботов. use_cache=True: свежий кэш (<TTL)
-    берётся как есть без перекраула, собирается только протухшее/пустое. Best-effort:
-    сбой одного вуза логируется и не мешает остальным и опросу Telegram."""
+    """Один проход прогрева всех пулов роботов ПАРАЛЛЕЛЬНО — каждый вуз в своём
+    потоке. Нагрузка на каждый сайт не растёт (вузы бьют по разным сайтам, СТАНКИН
+    всё равно видит только свои воркеры), а полный прогрев идёт за время самого
+    долгого вуза, а не суммы. use_cache=True: свежее берётся как есть, краулится
+    только протухшее/пустое. Best-effort: сбой одного вуза логируется и не мешает
+    остальным и опросу Telegram."""
     from src.robot.universities import (
         SUPPORTED_UNIVERSITIES,
         fetch_university_pool,
         robot_ready_universities,
     )
 
-    for university in robot_ready_universities():
-        parser_name = SUPPORTED_UNIVERSITIES[university]
-        try:
-            people, programs, _fetched_at, from_cache = fetch_university_pool(parser_name, use_cache=True)
-            source = "из кэша" if from_cache else "собрано заново"
-            logger.info(
-                "Прогрев робота %s: %s (направлений %d, абитуриентов %d)",
-                university,
-                source,
-                len(programs),
-                len(people),
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Прогрев робота %s не удался: %s", university, exc)
+    def _warm(university: str) -> tuple[str, bool, int, int]:
+        people, programs, _fetched_at, from_cache = fetch_university_pool(
+            SUPPORTED_UNIVERSITIES[university], use_cache=True
+        )
+        return university, from_cache, len(programs), len(people)
+
+    universities = robot_ready_universities()
+    with ThreadPoolExecutor(max_workers=max(len(universities), 1)) as executor:
+        futures = {executor.submit(_warm, u): u for u in universities}
+        for future in as_completed(futures):
+            university = futures[future]
+            try:
+                _u, from_cache, n_programs, n_people = future.result()
+                source = "из кэша" if from_cache else "собрано заново"
+                logger.info(
+                    "Прогрев робота %s: %s (направлений %d, абитуриентов %d)",
+                    university,
+                    source,
+                    n_programs,
+                    n_people,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Прогрев робота %s не удался: %s", university, exc)
     logger.info("Прогрев роботов завершён")
 
 
