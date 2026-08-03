@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -622,6 +623,34 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
     send_message(config.bot_token, chat_id, "Неизвестная команда. Напишите /help", reply_to=message_id)
 
 
+def _prewarm_robot_pools() -> None:
+    """Прогрев пулов всех роботов в фоне после старта бота — чтобы первый /робот
+    или /статус не висел на многоминутном крауле. use_cache=True: свежий кэш (<TTL)
+    берётся как есть без перекраула, собирается только протухшее/пустое. Best-effort:
+    сбой одного вуза логируется и не мешает остальным и опросу Telegram."""
+    from src.robot.universities import (
+        SUPPORTED_UNIVERSITIES,
+        fetch_university_pool,
+        robot_ready_universities,
+    )
+
+    for university in robot_ready_universities():
+        parser_name = SUPPORTED_UNIVERSITIES[university]
+        try:
+            people, programs, _fetched_at, from_cache = fetch_university_pool(parser_name, use_cache=True)
+            source = "из кэша" if from_cache else "собрано заново"
+            logger.info(
+                "Прогрев робота %s: %s (направлений %d, абитуриентов %d)",
+                university,
+                source,
+                len(programs),
+                len(people),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Прогрев робота %s не удался: %s", university, exc)
+    logger.info("Прогрев роботов завершён")
+
+
 def main() -> int:
     config = load_telegram_config()
     if not config:
@@ -630,6 +659,9 @@ def main() -> int:
 
     offset = load_offset(OFFSET_PATH)
     logger.info("Бот запущен. offset=%s", offset)
+
+    # Прогрев роботов в фоне: бот сразу опрашивает Telegram, пулы догреваются рядом.
+    threading.Thread(target=_prewarm_robot_pools, name="prewarm-robots", daemon=True).start()
 
     while True:
         try:
