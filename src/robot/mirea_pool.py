@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
@@ -21,6 +22,15 @@ CATALOG_PARAMS = {
     "edu_form_id": 1,
     "org_unit_id": "1484028700495285107",
 }
+# МИРЭА (priem.mirea.ru за DDoS-Guard) режет не-RU IP по гео. С зарубежного
+# хостинга запросы к МИРЭА идут через SOCKS5-прокси на домашний RU-канал (reverse
+# SSH-туннель). Адрес прокси — из env MIREA_PROXY (напр. socks5h://127.0.0.1:1080,
+# socks5h — чтобы и DNS резолвился на домашней стороне). Не задан → прямой доступ
+# (локально с RU IP всё работает и так). Только МИРЭА: остальные 3 вуза с
+# зарубежного IP отвечают нормально, им прокси не нужен.
+_MIREA_PROXY = os.environ.get("MIREA_PROXY", "").strip()
+_PROXIES = {"http": _MIREA_PROXY, "https": _MIREA_PROXY} if _MIREA_PROXY else None
+
 POOL_SCOPE = "full"
 MIN_CATALOG_PROGRAMS = 150
 CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "cache" / "mirea_robot_pool.json"
@@ -117,7 +127,7 @@ class MireaFullPool:
 
     @staticmethod
     def _catalog_from_api() -> list[MireaCompetition]:
-        response = requests.get(CATALOG_URL, params=CATALOG_PARAMS, timeout=60)
+        response = requests.get(CATALOG_URL, params=CATALOG_PARAMS, timeout=60, proxies=_PROXIES)
         response.raise_for_status()
         catalog: list[MireaCompetition] = []
         for program in response.json():
@@ -187,7 +197,7 @@ class MireaFullPool:
         last_error: Exception | None = None
         for attempt in range(FETCH_RETRIES):
             try:
-                response = requests.get(ENTRANTS_URL, params=params, timeout=180)
+                response = requests.get(ENTRANTS_URL, params=params, timeout=180, proxies=_PROXIES)
                 response.raise_for_status()
                 return response.json().get("data", [])
             except requests.HTTPError as exc:

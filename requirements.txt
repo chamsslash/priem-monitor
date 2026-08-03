@@ -1,3 +1,4 @@
 beautifulsoup4>=4.12
 lxml>=5.0
 requests>=2.31
+pysocks>=1.7  # SOCKS5-прокси для МИРЭА (гео-блок с зарубежного хостинга, см. mirea_pool)
