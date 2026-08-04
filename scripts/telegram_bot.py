@@ -5,7 +5,7 @@ import logging
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -609,54 +609,38 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
     send_message(config.bot_token, chat_id, "Неизвестная команда. Напишите /help", reply_to=message_id)
 
 
-# Период фонового прогрева робот-пулов. Совпадает с TTL кэша (~2 часа): после сна
-# кэш протухает и на следующем витке пересобирается, оставаясь всегда свежим.
-ROBOT_REFRESH_INTERVAL_SEC = 7200
+# Период фонового прогрева робот-пулов. СТРОГО МЕНЬШЕ TTL кэша (7200с): при
+# равенстве кэш протухал ровно к моменту очередного прогрева, и команда,
+# попавшая в это окно, уходила пересобирать пул синхронно. 90 минут дают запас
+# в полчаса, за который прогрев успевает обновить даже самый медленный вуз.
+ROBOT_REFRESH_INTERVAL_SEC = 5400
 
 
 def _prewarm_robot_pools_once() -> None:
-    """Один проход прогрева всех пулов роботов ПАРАЛЛЕЛЬНО — каждый вуз в своём
-    потоке. Нагрузка на каждый сайт не растёт (вузы бьют по разным сайтам, СТАНКИН
-    всё равно видит только свои воркеры), а полный прогрев идёт за время самого
-    долгого вуза, а не суммы. use_cache=True: свежее берётся как есть, краулится
-    только протухшее/пустое. Best-effort: сбой одного вуза логируется и не мешает
-    остальным и опросу Telegram."""
-    from src.robot.universities import (
-        SUPPORTED_UNIVERSITIES,
-        fetch_university_pool,
-        robot_ready_universities,
-    )
+    """Отправляет заявки на прогрев всех пулов и СРАЗУ возвращается.
 
-    def _warm(university: str) -> tuple[str, bool, int, int]:
-        people, programs, _fetched_at, from_cache = fetch_university_pool(
-            SUPPORTED_UNIVERSITIES[university], use_cache=True
-        )
-        return university, from_cache, len(programs), len(people)
+    Сам ничего не качает: пересборкой владеет refresh_worker, он же держит
+    single-flight — поэтому прогрев и команда пользователя, попавшие на один
+    вуз, больше не дублируют работу. Свежие кэши воркер пропускает сам
+    (force=False), так что перезапуск бота не перекачивает недавно собранное.
+    """
+    from src.robot.refresh_worker import get_refresh_worker
+    from src.robot.universities import robot_ready_universities
 
-    universities = robot_ready_universities()
-    with ThreadPoolExecutor(max_workers=max(len(universities), 1)) as executor:
-        futures = {executor.submit(_warm, u): u for u in universities}
-        for future in as_completed(futures):
-            university = futures[future]
-            try:
-                _u, from_cache, n_programs, n_people = future.result()
-                source = "из кэша" if from_cache else "собрано заново"
-                logger.info(
-                    "Прогрев робота %s: %s (направлений %d, абитуриентов %d)",
-                    university,
-                    source,
-                    n_programs,
-                    n_people,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Прогрев робота %s не удался: %s", university, exc)
-    logger.info("Прогрев роботов завершён")
+    worker = get_refresh_worker()
+    for university in robot_ready_universities():
+        try:
+            worker.request(university)
+        except ValueError as exc:
+            logger.warning("Заявка на прогрев %s отклонена: %s", university, exc)
+    logger.info("Заявки на прогрев отправлены воркеру")
 
 
 def _robot_pool_refresh_loop() -> None:
-    """Прогрев при старте и далее каждые ~2ч. После сна кэш протухает (age > TTL),
-    поэтому use_cache=True на следующем витке его пересобирает — кэш держится свежим,
-    а недавно использованные командой пулы зря не перекраулятся."""
+    """Шлёт заявки на прогрев при старте и далее каждые 90 минут.
+
+    Виток стоит доли секунды (заявки уходят в воркер и обрабатываются им
+    параллельно), поэтому сон почти точно равен заданному интервалу."""
     while True:
         _prewarm_robot_pools_once()
         time.sleep(ROBOT_REFRESH_INTERVAL_SEC)
