@@ -394,6 +394,14 @@ def _simulate_two_phase(
     )
 
 
+# Текст ошибки при stale_ok=True и пустом кэше — данные ещё ни разу не
+# собирались (например, первые минуты после рестарта бота). Обработчики и
+# форматтеры сравнивают с этой же строкой, чтобы отличить «данных пока нет»
+# от «код не найден» — сравнение по одной константе, а не по дублированному
+# литералу в каждом модуле.
+POOL_NOT_READY_ERROR = "Данные ещё собираются, вернусь через пару минут"
+
+
 def run_robot_simulation(
     university: str,
     settings: RobotSettings | None = None,
@@ -450,7 +458,7 @@ def run_robot_simulation(
         if stale_ok:
             cached = read_cached_pool(parser_name)
             if cached is None:
-                empty.error = "Данные ещё собираются, вернусь через пару минут"
+                empty.error = POOL_NOT_READY_ERROR
                 return empty
             people, programs, fetched_at, from_cache = cached
         else:
@@ -458,6 +466,13 @@ def run_robot_simulation(
     except Exception as exc:  # noqa: BLE001
         empty.error = str(exc)
         return empty
+
+    # Пул успешно прочитан — проставляем метку времени СРАЗУ, до любых
+    # последующих `return empty` (например, «Дима не найден в списках»).
+    # Иначе is_pool_stale(..., fetched_at=None) на таком результате всегда
+    # считает кэш протухшим, даже если он был получен секунду назад.
+    empty.fetched_at = fetched_at
+    empty.from_cache = from_cache
 
     try:
         dima, dima_in_pool = _resolve_dima_person(

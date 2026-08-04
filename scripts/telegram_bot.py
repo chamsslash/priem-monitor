@@ -77,12 +77,21 @@ def _help_text() -> str:
 
 
 def _format_multi_status(code: str, results: list, *, stale: bool = False) -> str:
+    from src.robot.simulator import POOL_NOT_READY_ERROR
+
     lines = [f"📊 Статус по коду {code}"]
     found_any = False
+    # Отдельно от found_any: был ли хоть один вуз, чей пул реально прочитался
+    # (данные есть, кода в них может и не быть). Пока пула нет вообще (первые
+    # минуты после рестарта) — это НЕ «код не найден», а «данные ещё собираются».
+    pool_ready_any = False
     for university, result in results:
         if result.error:
+            if result.error != POOL_NOT_READY_ERROR:
+                pool_ready_any = True
             continue
         found_any = True
+        pool_ready_any = True
         lines.append("")
         lines.append(f"— {university} —")
         if result.dima_placed_program_key is None:
@@ -93,9 +102,12 @@ def _format_multi_status(code: str, results: list, *, stale: bool = False) -> st
             lines.append(f"{result.dima_priority_used}-й приоритет · {via} · балл {result.dima_score}")
     if not found_any:
         lines.append("")
-        lines.append("Код не найден ни в одном из 4 вузов (Финуниверситет, МИРЭА, МЭИ, СТАНКИН).")
-        lines.append("Проверьте код через /код <номер>, либо вы подавали в другой вуз.")
-    if stale:
+        if pool_ready_any:
+            lines.append("Код не найден ни в одном из 4 вузов (Финуниверситет, МИРЭА, МЭИ, СТАНКИН).")
+            lines.append("Проверьте код через /код <номер>, либо вы подавали в другой вуз.")
+        else:
+            lines.append("⏳ Данные ещё собираются после перезапуска — вернитесь через пару минут.")
+    if stale and pool_ready_any:
         lines.append("")
         lines.append("⏳ Часть данных устарела — обновляю в фоне, повторите через пару минут.")
     lines.append("")
@@ -381,27 +393,31 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
     #     return
 
     if command == "/статус":
-        from src.robot.priorities import get_saved_priority_ids
-        from src.robot.refresh_worker import get_refresh_worker
-        from src.robot.simulator import run_robot_simulation
-        from src.robot.universities import SUPPORTED_UNIVERSITIES, is_pool_stale, robot_ready_universities
-        from src.telegram_users import build_robot_settings, get_user_code, robot_config_path
+        try:
+            from src.robot.priorities import get_saved_priority_ids
+            from src.robot.refresh_worker import get_refresh_worker
+            from src.robot.simulator import run_robot_simulation
+            from src.robot.universities import SUPPORTED_UNIVERSITIES, is_pool_stale, robot_ready_universities
+            from src.telegram_users import build_robot_settings, get_user_code, robot_config_path
 
-        code = get_user_code(chat_id)
-        worker = get_refresh_worker()
-        results = []
-        stale_any = False
-        for university in sorted(robot_ready_universities()):
-            settings = build_robot_settings(code, university)
-            priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
-            # stale_ok=True: читаем кэш и отвечаем мгновенно. Сетевая пересборка
-            # здесь подвесила бы цикл getUpdates для всех чатов сразу.
-            result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
-            results.append((university, result))
-            if is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):
-                stale_any = True
-                worker.request(university)
-        send_message(config.bot_token, chat_id, _format_multi_status(code, results, stale=stale_any), reply_to=message_id)
+            code = get_user_code(chat_id)
+            worker = get_refresh_worker()
+            results = []
+            stale_any = False
+            for university in sorted(robot_ready_universities()):
+                settings = build_robot_settings(code, university)
+                priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
+                # stale_ok=True: читаем кэш и отвечаем мгновенно. Сетевая пересборка
+                # здесь подвесила бы цикл getUpdates для всех чатов сразу.
+                result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
+                results.append((university, result))
+                if is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):
+                    stale_any = True
+                    worker.request(university)
+            send_message(config.bot_token, chat_id, _format_multi_status(code, results, stale=stale_any), reply_to=message_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Статус не построился: %s", exc)
+            send_message(config.bot_token, chat_id, f"Ошибка:\n{exc}", reply_to=message_id)
         return
 
     if command in {"/робот", "/robot"}:
@@ -449,22 +465,27 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
 
                 def _notify(university: str, error: Exception | None) -> None:
                     if error is not None:
-                        text = f"⚠️ {university}: не удалось обновить — {error}"
+                        message_text = f"⚠️ {university}: не удалось обновить — {error}"
                     else:
                         cached = read_cached_pool(SUPPORTED_UNIVERSITIES[university])
                         if cached is None:
-                            text = f"⚠️ {university}: обновление прошло, но кэш не читается"
+                            message_text = f"⚠️ {university}: обновление прошло, но кэш не читается"
                         else:
                             people, programs, fetched_at, _from_cache = cached
-                            text = format_robot_cache_refresh(
+                            message_text = format_robot_cache_refresh(
                                 university,
                                 fetched_at=fetched_at,
                                 people_count=len(people),
                                 programs_count=len(programs),
                             )
                     try:
-                        send_message(config.bot_token, chat_id, text)
-                    except TelegramAPIError as exc:
+                        send_message(config.bot_token, chat_id, message_text)
+                    except Exception as exc:  # noqa: BLE001
+                        # TelegramAPIError покрывает только ok=false с HTTP 200.
+                        # Заблокировавший бота (403) или удалённый чат (400)
+                        # прилетают как requests.exceptions.HTTPError, сетевой
+                        # сбой — как ConnectionError/Timeout. Ловим широко,
+                        # чтобы такие отказы не улетали трейсбеком в лог воркера.
                         logger.error("Не отправить итог обновления %s: %s", university, exc)
 
                 worker = get_refresh_worker()
@@ -508,8 +529,9 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
         try:
             from src.robot.format import format_competitors
             from src.robot.priorities import get_saved_priority_ids
+            from src.robot.refresh_worker import get_refresh_worker
             from src.robot.simulator import run_robot_simulation
-            from src.robot.universities import SUPPORTED_UNIVERSITIES, match_university_prefix
+            from src.robot.universities import SUPPORTED_UNIVERSITIES, is_pool_stale, match_university_prefix
 
             if len(parts) < 2:
                 send_message(
@@ -550,16 +572,12 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 send_message(config.bot_token, chat_id, "Сначала пришлите ваш код поступающего.", reply_to=message_id)
                 return
 
-            send_message(
-                config.bot_token,
-                chat_id,
-                f"Ищу соперников по коду {tracked_id} ({university})…",
-                reply_to=message_id,
-            )
             settings = build_robot_settings(code, university)
             priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
             result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
             send_long_message(config.bot_token, chat_id, format_competitors(result, tracked_id), reply_to=message_id)
+            if is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):
+                get_refresh_worker().request(university)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Competitors lookup failed: %s", exc)
             send_message(config.bot_token, chat_id, f"Ошибка:\n{exc}", reply_to=message_id)

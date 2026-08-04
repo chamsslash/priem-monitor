@@ -107,11 +107,22 @@ def _format_verification(report: VerificationReport | None) -> list[str]:
     return lines
 
 
+def _format_error_response(title: str, error: str) -> str:
+    if "не найден в списках вуза" in error:
+        return f"{title}\n\nВаш код не найден в списках этого вуза."
+
+    # POOL_NOT_READY_ERROR — не ошибка, а нормальное состояние прогрева
+    # (первые минуты после рестарта бота), поэтому без префикса «Ошибка:».
+    from .simulator import POOL_NOT_READY_ERROR
+
+    if error == POOL_NOT_READY_ERROR:
+        return f"{title}\n\n{error}"
+    return f"{title}\n\nОшибка: {error}"
+
+
 def format_robot_result(result: RobotSimulationResult) -> str:
     if result.error:
-        if "не найден в списках вуза" in result.error:
-            return f"🤖 Робот — {result.university}\n\nВаш код не найден в списках этого вуза."
-        return f"🤖 Робот — {result.university}\n\nОшибка: {result.error}"
+        return _format_error_response(f"🤖 Робот — {result.university}", result.error)
 
     lines = [
         _data_header(result),
@@ -167,6 +178,9 @@ def format_robot_result(result: RobotSimulationResult) -> str:
 
 
 def format_competitors(result: RobotSimulationResult, tracked_id: int) -> str:
+    if result.error:
+        return _format_error_response(f"🤖 Конкуренты — {result.university}", result.error)
+
     state = next((item for item in result.tracked_programs if item.tracked_id == tracked_id), None)
     if state is None:
         available = ", ".join(str(item.tracked_id) for item in result.tracked_programs)
