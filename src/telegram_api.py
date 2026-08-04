@@ -16,7 +16,12 @@ class TelegramAPIError(RuntimeError):
 def _call(token: str, method: str, payload: dict[str, Any] | None = None, files: dict | None = None) -> dict:
     url = API_BASE.format(token=token, method=method)
     response = requests.post(url, data=payload or {}, files=files, timeout=60)
-    response.raise_for_status()
+    if not response.ok:
+        # НЕ response.raise_for_status(): текст HTTPError содержит полный URL
+        # запроса, а вместе с ним и токен бота (см. API_BASE) — такой текст
+        # разлетался бы и в логи, и в сообщения пользователю (except-блоки в
+        # telegram_bot.py шлют текст исключения в чат как есть).
+        raise TelegramAPIError(f"{response.status_code}: {method}")
     data = response.json()
     if not data.get("ok"):
         raise TelegramAPIError(data.get("description", "Telegram API error"))

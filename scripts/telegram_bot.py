@@ -81,17 +81,20 @@ def _format_multi_status(code: str, results: list, *, stale: bool = False) -> st
 
     lines = [f"📊 Статус по коду {code}"]
     found_any = False
-    # Отдельно от found_any: был ли хоть один вуз, чей пул реально прочитался
-    # (данные есть, кода в них может и не быть). Пока пула нет вообще (первые
-    # минуты после рестарта) — это НЕ «код не найден», а «данные ещё собираются».
-    pool_ready_any = False
+    # Отдельно от found_any: вузы, чей пул реально прочитался (данные есть,
+    # кода в них может и не быть) — в отличие от POOL_NOT_READY_ERROR (пула
+    # ещё нет вообще, например первые минуты после рестарта): это НЕ «код не
+    # найден», а «данные ещё собираются». Список, а не просто счётчик/флаг —
+    # чтобы честно называть вузы при частичной готовности (M3), а не всегда
+    # утверждать «ни в одном из 4», когда реально прочитались только 2.
+    ready_universities: list[str] = []
     for university, result in results:
         if result.error:
             if result.error != POOL_NOT_READY_ERROR:
-                pool_ready_any = True
+                ready_universities.append(university)
             continue
         found_any = True
-        pool_ready_any = True
+        ready_universities.append(university)
         lines.append("")
         lines.append(f"— {university} —")
         if result.dima_placed_program_key is None:
@@ -102,12 +105,20 @@ def _format_multi_status(code: str, results: list, *, stale: bool = False) -> st
             lines.append(f"{result.dima_priority_used}-й приоритет · {via} · балл {result.dima_score}")
     if not found_any:
         lines.append("")
-        if pool_ready_any:
-            lines.append("Код не найден ни в одном из 4 вузов (Финуниверситет, МИРЭА, МЭИ, СТАНКИН).")
+        if ready_universities:
+            total = len(results)
+            names = ", ".join(sorted(ready_universities))
+            if len(ready_universities) == total:
+                lines.append(f"Код не найден ни в одном из {total} вузов ({names}).")
+            else:
+                lines.append(
+                    f"Код не найден среди {len(ready_universities)} из {total} вузов, "
+                    f"чьи данные уже готовы ({names})."
+                )
             lines.append("Проверьте код через /код <номер>, либо вы подавали в другой вуз.")
         else:
             lines.append("⏳ Данные ещё собираются после перезапуска — вернитесь через пару минут.")
-    if stale and pool_ready_any:
+    if stale and ready_universities:
         lines.append("")
         lines.append("⏳ Часть данных устарела — обновляю в фоне, повторите через пару минут.")
     lines.append("")
@@ -411,7 +422,11 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 # здесь подвесила бы цикл getUpdates для всех чатов сразу.
                 result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
                 results.append((university, result))
-                if is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):
+                # config_error (вуз выключен/не поддерживается/нет программ в
+                # конфиге) — пул в этом случае вообще не читался, fetched_at
+                # пуст всегда, и is_pool_stale() был бы True навечно, заказывая
+                # догрев на ровном месте (M1 из ре-ревью).
+                if not result.config_error and is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):
                     stale_any = True
                     worker.request(university)
             send_message(config.bot_token, chat_id, _format_multi_status(code, results, stale=stale_any), reply_to=message_id)
@@ -663,7 +678,12 @@ def _prewarm_robot_pools_once() -> None:
     worker = get_refresh_worker()
     for university in robot_ready_universities():
         try:
-            worker.request(university)
+            # max_age=ROBOT_REFRESH_INTERVAL_SEC: свежесть здесь считается по
+            # периоду прогрева, а не по TTL пула (7200с) — иначе прогрев раз в
+            # 90 минут в двух третях случаев видел бы кэш ещё «свежим» по TTL
+            # и молча пропускал пересборку, и реальный период обновления
+            # растягивался бы до TTL.
+            worker.request(university, max_age=ROBOT_REFRESH_INTERVAL_SEC)
         except ValueError as exc:
             logger.warning("Заявка на прогрев %s отклонена: %s", university, exc)
     logger.info("Заявки на прогрев отправлены воркеру")
@@ -675,7 +695,14 @@ def _robot_pool_refresh_loop() -> None:
     Виток стоит доли секунды (заявки уходят в воркер и обрабатываются им
     параллельно), поэтому сон почти точно равен заданному интервалу."""
     while True:
-        _prewarm_robot_pools_once()
+        try:
+            _prewarm_robot_pools_once()
+        except Exception:  # noqa: BLE001
+            # Без этого любое неожиданное исключение молча убивало бы
+            # daemon-поток прогрева насовсем, до самого рестарта бота — а
+            # цикл опроса Telegram (в соседнем потоке) продолжал бы работать,
+            # не подавая виду, что пулы больше не обновляются.
+            logger.exception("Виток прогрева робот-пулов упал")
         time.sleep(ROBOT_REFRESH_INTERVAL_SEC)
 
 
@@ -696,8 +723,18 @@ def main() -> int:
         try:
             updates = get_updates(config.bot_token, offset=offset, timeout=30)
         except TelegramAPIError as exc:
-            logger.error("getUpdates failed: %s", exc)
-            time.sleep(5)
+            if str(exc).startswith("409:"):
+                # 409 Conflict от getUpdates — другой процесс уже опрашивает
+                # Telegram этим же токеном. Не трейсбек: без этой ветки
+                # logger.exception печатал полный стек каждые ~10 секунд (в
+                # логе живого прогона — 88 строк за минуту, почти все отсюда).
+                logger.error(
+                    "Другой инстанс бота опрашивает Telegram тем же токеном — остановите его"
+                )
+                time.sleep(30)
+            else:
+                logger.error("getUpdates failed: %s", exc)
+                time.sleep(5)
             continue
         except Exception as exc:
             logger.exception("Unexpected polling error: %s", exc)

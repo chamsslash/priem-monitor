@@ -41,6 +41,13 @@ class RefreshWorker:
     после этого решения (self._force_requested) и, если он выставлен, всё
     равно уходит в сеть — иначе явное «/робот обновить» на границе TTL кэша
     молча превращалось бы в no-op с рапортом об успехе.
+
+    Инвариант: под self._lock не зовём ничего из executor/Future, кроме
+    самого executor.submit(). В частности, add_done_callback() всегда
+    вызывается ПОСЛЕ выхода из `with self._lock` — Future умеет выполнить
+    колбэк синхронно в вызывающем потоке, если задача уже завершена или
+    отменена к моменту регистрации, а значит рискует дёрнуть self._lock
+    реентрантно и подвесить поток изнутри же лока.
     """
 
     def __init__(self, max_workers: int = MAX_PARALLEL_REFRESH) -> None:
@@ -57,6 +64,7 @@ class RefreshWorker:
         *,
         on_done: DoneCallback | None = None,
         force: bool = False,
+        max_age: int | None = None,
     ) -> bool:
         """Заказать пересборку вуза. Возвращается немедленно, не блокирует вызывающего.
 
@@ -74,6 +82,12 @@ class RefreshWorker:
         теперь одинаково асинхронны — результат (успех / ошибка / «кэш и так
         был свеж») доезжает только через on_done, из воркер-потока.
 
+        max_age — необязательный порог свежести в секундах, СВОЙ для этой
+        заявки, вместо TTL пула. Нужен шедулеру прогрева: его период короче
+        TTL, и без max_age он ничего не пересобирал бы вплоть до истечения
+        полного TTL (см. is_pool_stale). Обработчики команд max_age не
+        передают — им нужна свежесть ровно в смысле TTL пула.
+
         Возврат значит «принята ли заявка», а НЕ «запущена ли новая сборка»
         (это раньше требовало звать on_done синхронно, чтобы правдиво вернуть
         True/False из того же вызова):
@@ -90,6 +104,7 @@ class RefreshWorker:
 
         rejection_error: Exception | None = None
         rejected_waiters: list[DoneCallback] = []
+        submitted: Future | None = None
 
         with self._lock:
             if self._closed:
@@ -112,7 +127,13 @@ class RefreshWorker:
 
                 self._in_flight[university] = [on_done] if on_done is not None else []
                 try:
-                    future = self._executor.submit(self._run, university, parser_name, force)
+                    # Под self._lock не зовём ничего из executor, кроме
+                    # submit(): add_done_callback переехал за пределы лока
+                    # (см. ниже) — future умеет выполнить колбэк синхронно в
+                    # ЭТОМ же потоке, если задача уже завершена/отменена к
+                    # моменту регистрации, а значит рискует дёрнуть
+                    # _drop_if_cancelled -> self._lock реентрантно.
+                    submitted = self._executor.submit(self._run, university, parser_name, force, max_age)
                 except RuntimeError as exc:
                     # На всякий случай: self._closed и submit() защищены одним
                     # и тем же self._lock, поэтому в штатной работе shutdown()
@@ -122,15 +143,16 @@ class RefreshWorker:
                     rejection_error = exc
                     rejected_waiters = self._in_flight.pop(university, [])
                     self._force_requested.pop(university, None)
-                else:
-                    # Если shutdown(cancel_futures=True) отменит эту задачу до
-                    # того, как _run успеет стартовать, сам _run не выполнится
-                    # и его finally не снимет метку. add_done_callback — это
-                    # единственная страховка на такой случай (см.
-                    # _drop_if_cancelled).
-                    future.add_done_callback(
-                        lambda f, u=university: self._drop_if_cancelled(u, f)
-                    )
+                    submitted = None
+
+        if submitted is not None:
+            # Если shutdown(cancel_futures=True) отменит эту задачу до того,
+            # как _run успеет стартовать, сам _run не выполнится и его finally
+            # не снимет метку. add_done_callback — это единственная страховка
+            # на такой случай (см. _drop_if_cancelled).
+            submitted.add_done_callback(
+                lambda f, u=university: self._drop_if_cancelled(u, f)
+            )
 
         if rejection_error is not None:
             # Колбэки — вне лока по тому же принципу, что и в _run: чужой код
@@ -144,26 +166,43 @@ class RefreshWorker:
 
         return True
 
-    def _run(self, university: str, parser_name: str, force: bool) -> None:
+    def _run(self, university: str, parser_name: str, force: bool, max_age: int | None = None) -> None:
         error: Exception | None = None
+        # Если не None — метка in-flight уже снята внутри while (ветка «кэш
+        # свеж»), и finally не должен снимать её повторно: между тем снятием
+        # и этим finally есть окно, в которое request(force=True) успел бы
+        # прицепиться к уже мёртвой сборке и получить «успех» без единого
+        # сетевого запроса (см. P1 из ре-ревью).
+        waiters: list[DoneCallback] | None = None
         try:
             while True:
                 if not force:
                     cached = read_cached_pool(parser_name)
-                    if cached is not None and not is_pool_stale(parser_name, cached[2]):
+                    if cached is not None and not is_pool_stale(parser_name, cached[2], max_age=max_age):
                         logger.info("Кэш %s ещё свеж — пересборка не нужна", university)
                         with self._lock:
                             # force, прилетевший ПОКА мы читали кэш (заявка
                             # подхватила идущую сборку), обязан получить
-                            # настоящую пересборку, а не наш no-op.
+                            # настоящую пересборку, а не наш no-op. Снимаем
+                            # метку в ТОМ ЖЕ захвате лока, что и эту проверку —
+                            # иначе после неё и до отдельного захвата в finally
+                            # остаётся окно для гонки с force.
                             force = self._force_requested.pop(university, False)
+                            if not force:
+                                waiters = self._in_flight.pop(university, [])
                         if not force:
                             break
                         continue
 
-                people, programs, _fetched_at, _from_cache = fetch_university_pool(
+                people, programs, _fetched_at, from_cache = fetch_university_pool(
                     parser_name, use_cache=False
                 )
+                if from_cache:
+                    # use_cache=False обязан был сходить в сеть. from_cache=True
+                    # значит пул сам откатился на протухший кэш после сетевой
+                    # ошибки (см. build() в *_pool.py) — сборка провалилась, а
+                    # не удалась, даже если исключение наружу не вылетело.
+                    raise RuntimeError("сайт вуза недоступен, показываю прежние данные")
                 logger.info(
                     "Пересобран %s: направлений %d, абитуриентов %d",
                     university,
@@ -177,13 +216,15 @@ class RefreshWorker:
             # осталась бы висеть в _in_flight навсегда, а ожидающие не узнали
             # бы, что сборка не состоялась.
             error = exc if isinstance(exc, Exception) else RuntimeError(f"{type(exc).__name__}: {exc}")
-            logger.warning("Пересборка %s не удалась: %s", university, exc)
+            logger.warning("Пересборка %s не удалась: %r", university, exc)
         finally:
             # Снимаем метку и рассылаем колбэки ВСЕГДА, из одного места —
-            # finally выполняется и при успехе, и при любом исключении.
-            with self._lock:
-                waiters = self._in_flight.pop(university, [])
-                self._force_requested.pop(university, None)
+            # finally выполняется и при успехе, и при любом исключении. Если
+            # её уже сняли выше (waiters не None) — не делаем этого повторно.
+            if waiters is None:
+                with self._lock:
+                    waiters = self._in_flight.pop(university, [])
+                    self._force_requested.pop(university, None)
             # Колбэки — вне лока: чужой код (отправка в Telegram) не должен
             # держать мьютекс и тормозить заявки по другим вузам.
             for callback in waiters:

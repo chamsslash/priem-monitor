@@ -182,4 +182,9 @@ class RobotSimulationResult:
     from_cache: bool = False
     fetched_at: str | None = None
     error: str | None = None
+    # True — error вызван настройкой (вуз не поддерживается / выключен в
+    # config/robot.json / нет отслеживаемых программ), а не состоянием пула.
+    # Пул в таких случаях вообще не читался, поэтому fetched_at=None — но это
+    # НЕ значит «кэш протух», и не должно заказывать догрев у refresh_worker.
+    config_error: bool = False
     verification: VerificationReport | None = None

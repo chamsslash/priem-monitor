@@ -440,11 +440,13 @@ def run_robot_simulation(
 
     if parser_name is None:
         empty.error = f"Робот пока не поддерживает вуз «{university}»"
+        empty.config_error = True
         return empty
 
     university_cfg = settings.universities.get(university, {})
     if not university_cfg.get("enabled", True):
         empty.error = f"Симуляция для «{university}» отключена в config/robot.json"
+        empty.config_error = True
         return empty
 
     tracked_programs = [
@@ -452,6 +454,7 @@ def run_robot_simulation(
     ]
     if not tracked_programs:
         empty.error = f"В конфиге нет программ для «{university}»"
+        empty.config_error = True
         return empty
 
     try:

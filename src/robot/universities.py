@@ -78,11 +78,16 @@ def read_cached_pool(parser_name: str) -> CachedPool | None:
     return reader()
 
 
-def is_pool_stale(parser_name: str, fetched_at: str | None) -> bool:
-    """Старше ли кэш своего TTL. Нечитаемая/пустая метка времени = считаем протухшим."""
+def is_pool_stale(parser_name: str, fetched_at: str | None, *, max_age: int | None = None) -> bool:
+    """Старше ли кэш своего TTL. Нечитаемая/пустая метка времени = считаем протухшим.
+
+    max_age — необязательный порог в секундах вместо TTL пула. Нужен шедулеру
+    прогрева: его период короче TTL, и без своего порога он не пересобирал бы
+    ничего до истечения полного TTL пула.
+    """
     if not fetched_at:
         return True
-    ttl = _CACHE_TTLS.get(parser_name)
+    ttl = max_age if max_age is not None else _CACHE_TTLS.get(parser_name)
     if ttl is None:
         return True
     try:
