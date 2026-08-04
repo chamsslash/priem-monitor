@@ -33,6 +33,13 @@ def _data_header(result: RobotSimulationResult) -> str:
     if not fetched:
         return title
     if result.from_cache:
+        # Протухший кэш всё равно показываем (иначе бот молчал бы минутами),
+        # но честно говорим, что цифры старые и свежие уже едут.
+        from .universities import SUPPORTED_UNIVERSITIES, is_pool_stale
+
+        parser_name = SUPPORTED_UNIVERSITIES.get(result.university)
+        if parser_name is not None and is_pool_stale(parser_name, result.fetched_at):
+            return f"{title} (кэш от {fetched} · обновляю в фоне)"
         return f"{title} (кэш от {fetched})"
     return f"{title} (данные от {fetched})"
 

@@ -5,7 +5,6 @@ import logging
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,7 +76,7 @@ def _help_text() -> str:
     )
 
 
-def _format_multi_status(code: str, results: list) -> str:
+def _format_multi_status(code: str, results: list, *, stale: bool = False) -> str:
     lines = [f"📊 Статус по коду {code}"]
     found_any = False
     for university, result in results:
@@ -96,6 +95,9 @@ def _format_multi_status(code: str, results: list) -> str:
         lines.append("")
         lines.append("Код не найден ни в одном из 4 вузов (Финуниверситет, МИРЭА, МЭИ, СТАНКИН).")
         lines.append("Проверьте код через /код <номер>, либо вы подавали в другой вуз.")
+    if stale:
+        lines.append("")
+        lines.append("⏳ Часть данных устарела — обновляю в фоне, повторите через пару минут.")
     lines.append("")
     lines.append("Подробности по одному вузу: /робот <вуз>")
     return "\n".join(lines)
@@ -380,18 +382,26 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
 
     if command == "/статус":
         from src.robot.priorities import get_saved_priority_ids
+        from src.robot.refresh_worker import get_refresh_worker
         from src.robot.simulator import run_robot_simulation
-        from src.robot.universities import robot_ready_universities
+        from src.robot.universities import SUPPORTED_UNIVERSITIES, is_pool_stale, robot_ready_universities
         from src.telegram_users import build_robot_settings, get_user_code, robot_config_path
 
         code = get_user_code(chat_id)
+        worker = get_refresh_worker()
         results = []
+        stale_any = False
         for university in sorted(robot_ready_universities()):
             settings = build_robot_settings(code, university)
             priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
-            result = run_robot_simulation(university, settings=settings, use_cache=True, priority_ids=priority_ids)
+            # stale_ok=True: читаем кэш и отвечаем мгновенно. Сетевая пересборка
+            # здесь подвесила бы цикл getUpdates для всех чатов сразу.
+            result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
             results.append((university, result))
-        send_message(config.bot_token, chat_id, _format_multi_status(code, results), reply_to=message_id)
+            if is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):
+                stale_any = True
+                worker.request(university)
+        send_message(config.bot_token, chat_id, _format_multi_status(code, results, stale=stale_any), reply_to=message_id)
         return
 
     if command in {"/робот", "/robot"}:
@@ -400,7 +410,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             from src.robot.format import format_robot_cache_refresh, format_robot_result
             from src.robot.priorities import get_saved_priority_ids
             from src.robot.simulator import run_robot_simulation
-            from src.robot.universities import SUPPORTED_UNIVERSITIES, fetch_university_pool, parse_robot_command
+            from src.robot.universities import SUPPORTED_UNIVERSITIES, parse_robot_command
 
             action, target = parse_robot_command(parts)
 
@@ -420,40 +430,46 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                     send_message(
                         config.bot_token,
                         chat_id,
-                        "Обновляю кэш робота…",
+                        "Обновляю кэш робота в фоне — пришлю результат по каждому вузу.",
                         reply_to=message_id,
                     )
                 else:
                     send_message(
                         config.bot_token,
                         chat_id,
-                        f"Обновляю кэш робота для {universities[0]}… Это может занять 1–3 минуты.",
+                        f"Обновляю кэш робота для {universities[0]} в фоне — пришлю результат, "
+                        "как будет готово. Остальные команды работают как обычно.",
                         reply_to=message_id,
                     )
 
-                # Вузы обновляем ПАРАЛЛЕЛЬНО (каждый — свой сайт), порядок сообщений
-                # сохраняем как в запросе. ValueError по вузу → строка-предупреждение.
-                def _refresh_one(university: str) -> str:
-                    parser_name = SUPPORTED_UNIVERSITIES[university]
-                    try:
-                        people, programs, fetched_at, _ = fetch_university_pool(parser_name, use_cache=False)
-                    except ValueError as exc:
-                        return f"⚠️ {university}: {exc}"
-                    return format_robot_cache_refresh(
-                        university,
-                        fetched_at=fetched_at,
-                        people_count=len(people),
-                        programs_count=len(programs),
-                    )
+                # Пересборку ведёт воркер; здесь только ack, чтобы цикл опроса
+                # не стоял 1–7 минут. Готовый результат прилетит колбэком.
+                from src.robot.refresh_worker import get_refresh_worker
+                from src.robot.universities import read_cached_pool
 
-                with ThreadPoolExecutor(max_workers=max(len(universities), 1)) as executor:
-                    by_university = dict(zip(universities, executor.map(_refresh_one, universities)))
-                send_message(
-                    config.bot_token,
-                    chat_id,
-                    "\n\n".join(by_university[u] for u in universities),
-                    reply_to=message_id,
-                )
+                def _notify(university: str, error: Exception | None) -> None:
+                    if error is not None:
+                        text = f"⚠️ {university}: не удалось обновить — {error}"
+                    else:
+                        cached = read_cached_pool(SUPPORTED_UNIVERSITIES[university])
+                        if cached is None:
+                            text = f"⚠️ {university}: обновление прошло, но кэш не читается"
+                        else:
+                            people, programs, fetched_at, _from_cache = cached
+                            text = format_robot_cache_refresh(
+                                university,
+                                fetched_at=fetched_at,
+                                people_count=len(people),
+                                programs_count=len(programs),
+                            )
+                    try:
+                        send_message(config.bot_token, chat_id, text)
+                    except TelegramAPIError as exc:
+                        logger.error("Не отправить итог обновления %s: %s", university, exc)
+
+                worker = get_refresh_worker()
+                for university in universities:
+                    worker.request(university, on_done=_notify, force=True)
                 return
 
             university = target if isinstance(target, str) else "МИРЭА"
@@ -473,16 +489,15 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 send_message(config.bot_token, chat_id, "Сначала пришлите ваш код поступающего.", reply_to=message_id)
                 return
 
-            send_message(
-                config.bot_token,
-                chat_id,
-                f"Запускаю симуляцию робота для {university}…\nЗагружаю списки, это может занять 1–3 минуты.",
-                reply_to=message_id,
-            )
+            from src.robot.refresh_worker import get_refresh_worker
+            from src.robot.universities import is_pool_stale
+
             settings = build_robot_settings(code, university)
             priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
-            result = run_robot_simulation(university, settings=settings, use_cache=True, priority_ids=priority_ids)
+            result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
             send_long_message(config.bot_token, chat_id, format_robot_result(result), reply_to=message_id)
+            if is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):
+                get_refresh_worker().request(university)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Robot simulation failed: %s", exc)
             send_message(config.bot_token, chat_id, f"Ошибка симуляции робота:\n{exc}", reply_to=message_id)
@@ -543,7 +558,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             )
             settings = build_robot_settings(code, university)
             priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
-            result = run_robot_simulation(university, settings=settings, use_cache=True, priority_ids=priority_ids)
+            result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
             send_long_message(config.bot_token, chat_id, format_competitors(result, tracked_id), reply_to=message_id)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Competitors lookup failed: %s", exc)
