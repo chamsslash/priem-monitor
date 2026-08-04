@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from .universities import (
     SUPPORTED_UNIVERSITIES,
@@ -35,12 +35,20 @@ class RefreshWorker:
     Проверка свежести кэша тоже происходит под меткой in-flight (внутри
     _run), а не до неё — иначе между чтением кэша и постановкой метки успела
     бы прошмыгнуть гонка и превратить single-flight в double-flight.
+
+    force, подхвативший идущую сборку уже ПОСЛЕ того, как она решила «кэш
+    свеж, качать не буду», не теряется: _run перечитывает флаг форса сразу
+    после этого решения (self._force_requested) и, если он выставлен, всё
+    равно уходит в сеть — иначе явное «/робот обновить» на границе TTL кэша
+    молча превращалось бы в no-op с рапортом об успехе.
     """
 
     def __init__(self, max_workers: int = MAX_PARALLEL_REFRESH) -> None:
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="refresh")
         self._lock = threading.Lock()
         self._in_flight: dict[str, list[DoneCallback]] = {}
+        # force, прилетевший, пока идущая сборка ещё решает «кэш свеж или нет».
+        self._force_requested: dict[str, bool] = {}
         self._closed = False
 
     def request(
@@ -94,12 +102,17 @@ class RefreshWorker:
                 if waiters is not None:
                     if on_done is not None:
                         waiters.append(on_done)
+                    if force:
+                        # Идущая сборка могла уже прочитать кэш и решить, что
+                        # он свеж — а значит, вот-вот завершится no-op'ом. Наш
+                        # force обязан пробить этот no-op (см. _run).
+                        self._force_requested[university] = True
                     logger.info("Пересборка %s уже идёт — заявка подхвачена", university)
                     return True
 
                 self._in_flight[university] = [on_done] if on_done is not None else []
                 try:
-                    self._executor.submit(self._run, university, parser_name, force)
+                    future = self._executor.submit(self._run, university, parser_name, force)
                 except RuntimeError as exc:
                     # На всякий случай: self._closed и submit() защищены одним
                     # и тем же self._lock, поэтому в штатной работе shutdown()
@@ -108,6 +121,16 @@ class RefreshWorker:
                     # executor, а не ожидаемый рабочий путь.
                     rejection_error = exc
                     rejected_waiters = self._in_flight.pop(university, [])
+                    self._force_requested.pop(university, None)
+                else:
+                    # Если shutdown(cancel_futures=True) отменит эту задачу до
+                    # того, как _run успеет стартовать, сам _run не выполнится
+                    # и его finally не снимет метку. add_done_callback — это
+                    # единственная страховка на такой случай (см.
+                    # _drop_if_cancelled).
+                    future.add_done_callback(
+                        lambda f, u=university: self._drop_if_cancelled(u, f)
+                    )
 
         if rejection_error is not None:
             # Колбэки — вне лока по тому же принципу, что и в _run: чужой код
@@ -124,10 +147,20 @@ class RefreshWorker:
     def _run(self, university: str, parser_name: str, force: bool) -> None:
         error: Exception | None = None
         try:
-            cached = None if force else read_cached_pool(parser_name)
-            if cached is not None and not is_pool_stale(parser_name, cached[2]):
-                logger.info("Кэш %s ещё свеж — пересборка не нужна", university)
-            else:
+            while True:
+                if not force:
+                    cached = read_cached_pool(parser_name)
+                    if cached is not None and not is_pool_stale(parser_name, cached[2]):
+                        logger.info("Кэш %s ещё свеж — пересборка не нужна", university)
+                        with self._lock:
+                            # force, прилетевший ПОКА мы читали кэш (заявка
+                            # подхватила идущую сборку), обязан получить
+                            # настоящую пересборку, а не наш no-op.
+                            force = self._force_requested.pop(university, False)
+                        if not force:
+                            break
+                        continue
+
                 people, programs, _fetched_at, _from_cache = fetch_university_pool(
                     parser_name, use_cache=False
                 )
@@ -137,18 +170,20 @@ class RefreshWorker:
                     len(programs),
                     len(people),
                 )
+                break
         except BaseException as exc:  # noqa: BLE001
             # BaseException, а не Exception: KeyboardInterrupt/SystemExit тоже
             # обязаны снять метку и дойти до колбэков в finally — иначе заявка
             # осталась бы висеть в _in_flight навсегда, а ожидающие не узнали
             # бы, что сборка не состоялась.
-            error = exc if isinstance(exc, Exception) else RuntimeError(str(exc))
+            error = exc if isinstance(exc, Exception) else RuntimeError(f"{type(exc).__name__}: {exc}")
             logger.warning("Пересборка %s не удалась: %s", university, exc)
         finally:
             # Снимаем метку и рассылаем колбэки ВСЕГДА, из одного места —
             # finally выполняется и при успехе, и при любом исключении.
             with self._lock:
                 waiters = self._in_flight.pop(university, [])
+                self._force_requested.pop(university, None)
             # Колбэки — вне лока: чужой код (отправка в Telegram) не должен
             # держать мьютекс и тормозить заявки по другим вузам.
             for callback in waiters:
@@ -156,6 +191,29 @@ class RefreshWorker:
                     callback(university, error)
                 except Exception:  # noqa: BLE001
                     logger.exception("Колбэк пересборки %s упал", university)
+
+    def _drop_if_cancelled(self, university: str, future: Future) -> None:
+        """Страховка на случай, если задачу отменили до того, как она стартовала.
+
+        shutdown(cancel_futures=True) отменяет ещё не начатые задачи — тогда
+        _run для них вообще не запускается, и его finally (единственное
+        место, которое снимает метку и рассылает колбэки) не выполняется.
+        Без этой страховки заявка повисла бы в _in_flight навсегда, а
+        ожидающие не получили бы ни успеха, ни ошибки. Вызывается из потока,
+        который дёрнул shutdown() — это редкий путь остановки процесса, не
+        основной цикл опроса.
+        """
+        if not future.cancelled():
+            return  # обычный путь: _run сам всё сделал в своём finally
+        with self._lock:
+            waiters = self._in_flight.pop(university, [])
+            self._force_requested.pop(university, None)
+        error = RuntimeError("Воркер остановлен — пересборка отменена")
+        for callback in waiters:
+            try:
+                callback(university, error)
+            except Exception:  # noqa: BLE001
+                logger.exception("Колбэк пересборки %s упал", university)
 
     def is_closed(self) -> bool:
         """Остановлен ли воркер (shutdown() уже вызывался)."""
@@ -165,13 +223,15 @@ class RefreshWorker:
     def shutdown(self) -> None:
         """Останавливает приём новых заявок.
 
-        cancel_futures=True отменяет только ещё НЕ начатые сборки — уже
-        идущие задачи не прерываются, доработают до конца. Мгновенного выхода
-        из процесса это не даёт: ThreadPoolExecutor регистрирует join своих
-        активных потоков через threading._register_atexit независимо от
-        wait=False, так что интерпретатор всё равно дождётся уже запущенных
-        пересборок при выходе — это поведение стандартной библиотеки
-        concurrent.futures, а не баг этого модуля.
+        cancel_futures=True отменяет только ещё НЕ начатые сборки (см.
+        _drop_if_cancelled — их заявки всё равно получат колбэк с ошибкой, а
+        не повиснут молча) — уже идущие задачи не прерываются, доработают до
+        конца. Мгновенного выхода из процесса это не даёт: ThreadPoolExecutor
+        регистрирует join своих активных потоков через
+        threading._register_atexit независимо от wait=False, так что
+        интерпретатор всё равно дождётся уже запущенных пересборок при
+        выходе — это поведение стандартной библиотеки concurrent.futures, а
+        не баг этого модуля.
         """
         with self._lock:
             self._closed = True
@@ -188,10 +248,18 @@ def get_refresh_worker() -> RefreshWorker:
 
     Если существующий воркер уже остановлен (shutdown()), создаёт новый —
     иначе один shutdown() необратимо лишил бы процесс возможности собирать
-    пулы до самого его завершения.
+    пулы до самого его завершения. Такое пересоздание залогировано: это
+    неожиданный путь (после shutdown() обычно никто больше не должен звать
+    воркер), и новый пул потоков, который никто явно не закрывал, стоит
+    заметить в логах, а не проглатывать молча.
     """
     global _worker
     with _worker_lock:
-        if _worker is None or _worker.is_closed():
+        if _worker is not None and _worker.is_closed():
+            logger.warning(
+                "get_refresh_worker(): предыдущий воркер был остановлен (shutdown()) — создаю новый"
+            )
+            _worker = None
+        if _worker is None:
             _worker = RefreshWorker()
         return _worker
