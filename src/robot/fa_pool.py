@@ -310,3 +310,13 @@ def tracked_programs() -> list[ProgramConfig]:
 
 def fetch_fa_full_pool(*, use_cache: bool = True) -> tuple[list[RobotPerson], list[RobotProgram], str, bool]:
     return FaFullPool().build(use_cache=use_cache)
+
+
+def read_fa_cached_pool() -> tuple[list[RobotPerson], list[RobotProgram], str, bool] | None:
+    """Отдаёт кэш ФА ЛЮБОГО возраста и никогда не ходит в сеть.
+
+    Нужна обработчикам команд: они обязаны отвечать мгновенно, поэтому берут
+    что есть на диске, а протухание — повод отправить заявку refresh-воркеру,
+    а не качать прямо здесь. None — кэша нет вовсе (или он несовместим).
+    """
+    return FaFullPool()._load_cache(ignore_ttl=True)

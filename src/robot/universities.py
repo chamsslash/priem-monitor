@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from datetime import datetime, timezone
 
 from ..tracked_universities import TRACKED_UNIVERSITIES
-from .fa_pool import fetch_fa_full_pool
-from .mirea_pool import fetch_mirea_full_pool
+from .fa_pool import CACHE_TTL_SEC as FA_CACHE_TTL_SEC
+from .fa_pool import fetch_fa_full_pool, read_fa_cached_pool
+from .mirea_pool import CACHE_TTL_SEC as MIREA_CACHE_TTL_SEC
+from .mirea_pool import fetch_mirea_full_pool, read_mirea_cached_pool
 from .models import RobotPerson, RobotProgram
-from .mpei_pool import fetch_mpei_full_pool
-from .stankin_pool import fetch_stankin_full_pool
+from .mpei_pool import CACHE_TTL_SEC as MPEI_CACHE_TTL_SEC
+from .mpei_pool import fetch_mpei_full_pool, read_mpei_cached_pool
+from .stankin_pool import CACHE_TTL_SEC as STANKIN_CACHE_TTL_SEC
+from .stankin_pool import fetch_stankin_full_pool, read_stankin_cached_pool
 
-PoolFetcher = Callable[..., tuple[list[RobotPerson], list[RobotProgram], str, bool]]
+CachedPool = tuple[list[RobotPerson], list[RobotProgram], str, bool]
+PoolFetcher = Callable[..., CachedPool]
+CacheReader = Callable[[], CachedPool | None]
 
 SUPPORTED_UNIVERSITIES: dict[str, str] = {
     "Финансовый университет": "fa",
@@ -36,6 +43,53 @@ def fetch_university_pool(parser_name: str, *, use_cache: bool = True) -> tuple[
     if fetcher is None:
         raise ValueError(f"Сборщик единого списка для parser={parser_name} пока не реализован")
     return fetcher(use_cache=use_cache)
+
+
+_CACHE_READERS: dict[str, CacheReader] = {
+    "fa": read_fa_cached_pool,
+    "mirea": read_mirea_cached_pool,
+    "mpei": read_mpei_cached_pool,
+    "stankin": read_stankin_cached_pool,
+}
+
+# TTL берём из самих пулов, а не дублируем число: если пул поменяет свой срок
+# жизни кэша, «протухание» здесь поедет за ним автоматически.
+_CACHE_TTLS: dict[str, int] = {
+    "fa": FA_CACHE_TTL_SEC,
+    "mirea": MIREA_CACHE_TTL_SEC,
+    "mpei": MPEI_CACHE_TTL_SEC,
+    "stankin": STANKIN_CACHE_TTL_SEC,
+}
+
+if set(_CACHE_READERS) != set(_POOL_FETCHERS) or set(_CACHE_TTLS) != set(_POOL_FETCHERS):
+    raise RuntimeError("_CACHE_READERS/_CACHE_TTLS должны покрывать те же парсеры, что и _POOL_FETCHERS")
+
+
+def read_cached_pool(parser_name: str) -> CachedPool | None:
+    """Кэш вуза любого возраста, без единого сетевого запроса.
+
+    Точка входа для обработчиков команд. None — кэша нет (первый запуск либо
+    формат кэша устарел), тогда вызывающий обязан честно сказать «данные ещё
+    собираются», а не пытаться собрать их сам.
+    """
+    reader = _CACHE_READERS.get(parser_name)
+    if reader is None:
+        raise ValueError(f"Читатель кэша для parser={parser_name} не зарегистрирован")
+    return reader()
+
+
+def is_pool_stale(parser_name: str, fetched_at: str | None) -> bool:
+    """Старше ли кэш своего TTL. Нечитаемая/пустая метка времени = считаем протухшим."""
+    if not fetched_at:
+        return True
+    ttl = _CACHE_TTLS.get(parser_name)
+    if ttl is None:
+        return True
+    try:
+        fetched_dt = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return (datetime.now(timezone.utc) - fetched_dt).total_seconds() > ttl
 
 
 def match_university_prefix(

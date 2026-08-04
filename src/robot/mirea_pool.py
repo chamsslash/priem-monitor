@@ -300,3 +300,8 @@ def tracked_programs() -> list[ProgramConfig]:
 
 def fetch_mirea_full_pool(*, use_cache: bool = True) -> tuple[list[RobotPerson], list[RobotProgram], str, bool]:
     return MireaFullPool().build(use_cache=use_cache)
+
+
+def read_mirea_cached_pool() -> tuple[list[RobotPerson], list[RobotProgram], str, bool] | None:
+    """Отдаёт кэш МИРЭА ЛЮБОГО возраста и никогда не ходит в сеть. См. read_fa_cached_pool."""
+    return MireaFullPool()._load_cache(ignore_ttl=True)

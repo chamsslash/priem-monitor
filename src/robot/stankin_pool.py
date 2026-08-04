@@ -518,3 +518,8 @@ class StankinFullPool:
 
 def fetch_stankin_full_pool(*, use_cache: bool = True) -> tuple[list[RobotPerson], list[RobotProgram], str, bool]:
     return StankinFullPool().build(use_cache=use_cache)
+
+
+def read_stankin_cached_pool() -> tuple[list[RobotPerson], list[RobotProgram], str, bool] | None:
+    """Отдаёт кэш СТАНКИН ЛЮБОГО возраста и никогда не ходит в сеть. См. read_fa_cached_pool."""
+    return StankinFullPool()._load_cache(ignore_ttl=True)
