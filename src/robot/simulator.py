@@ -15,7 +15,7 @@ from .models import (
     RobotProgram,
     RobotSimulationResult,
 )
-from .universities import SUPPORTED_UNIVERSITIES, fetch_university_pool
+from .universities import SUPPORTED_UNIVERSITIES, fetch_university_pool, read_cached_pool
 from .verification import build_verification_report
 
 
@@ -399,8 +399,13 @@ def run_robot_simulation(
     settings: RobotSettings | None = None,
     *,
     use_cache: bool = True,
+    stale_ok: bool = False,
     priority_ids: list[int] | None = None,
 ) -> RobotSimulationResult:
+    """stale_ok=True — брать пул ТОЛЬКО из кэша, любого возраста, и никогда не
+    ходить в сеть. Режим для обработчиков команд Telegram: они крутятся в том же
+    потоке, что и опрос getUpdates, поэтому сетевая пересборка там подвесила бы
+    бота для всех чатов сразу. Пересборку заказывает refresh_worker."""
     settings = settings or load_robot_config()
     parser_name = SUPPORTED_UNIVERSITIES.get(university)
     empty = RobotSimulationResult(
@@ -442,7 +447,14 @@ def run_robot_simulation(
         return empty
 
     try:
-        people, programs, fetched_at, from_cache = fetch_university_pool(parser_name, use_cache=use_cache)
+        if stale_ok:
+            cached = read_cached_pool(parser_name)
+            if cached is None:
+                empty.error = "Данные ещё собираются, вернусь через пару минут"
+                return empty
+            people, programs, fetched_at, from_cache = cached
+        else:
+            people, programs, fetched_at, from_cache = fetch_university_pool(parser_name, use_cache=use_cache)
     except Exception as exc:  # noqa: BLE001
         empty.error = str(exc)
         return empty
