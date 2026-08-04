@@ -90,7 +90,12 @@ def _format_multi_status(code: str, results: list, *, stale: bool = False) -> st
     ready_universities: list[str] = []
     for university, result in results:
         if result.error:
-            if result.error != POOL_NOT_READY_ERROR:
+            # config_error (вуз отключён/не поддержан/нет программ) — пул тоже
+            # не читался, как и при POOL_NOT_READY_ERROR, просто по другой
+            # причине. Ни тот, ни другой случай не должны попадать в «данные
+            # уже готовы» — иначе бот поимённо соврёт про вуз, чей пул вообще
+            # не открывался.
+            if result.error != POOL_NOT_READY_ERROR and not result.config_error:
                 ready_universities.append(university)
             continue
         found_any = True
@@ -496,11 +501,12 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                     try:
                         send_message(config.bot_token, chat_id, message_text)
                     except Exception as exc:  # noqa: BLE001
-                        # TelegramAPIError покрывает только ok=false с HTTP 200.
-                        # Заблокировавший бота (403) или удалённый чат (400)
-                        # прилетают как requests.exceptions.HTTPError, сетевой
-                        # сбой — как ConnectionError/Timeout. Ловим широко,
-                        # чтобы такие отказы не улетали трейсбеком в лог воркера.
+                        # TelegramAPIError теперь покрывает и ok=false с HTTP 200,
+                        # и любой не-2xx ответ (403 «бот заблокирован», 400
+                        # «чат удалён» и т.п. — см. _call в telegram_api.py).
+                        # Сетевой сбой (ConnectionError/Timeout) в TelegramAPIError
+                        # не заворачивается — ловим широко, чтобы никакой из этих
+                        # отказов не улетал трейсбеком в лог воркера.
                         logger.error("Не отправить итог обновления %s: %s", university, exc)
 
                 worker = get_refresh_worker()
@@ -532,7 +538,11 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
             result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
             send_long_message(config.bot_token, chat_id, format_robot_result(result), reply_to=message_id)
-            if is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):
+            # config_error (вуз отключён/нет программ в конфиге) — пул вообще
+            # не читался, fetched_at пуст всегда, is_pool_stale() был бы True
+            # навечно и заказывал бы бессмысленную сетевую пересборку на
+            # КАЖДУЮ команду (M1 из ре-ревью).
+            if not result.config_error and is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):
                 get_refresh_worker().request(university)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Robot simulation failed: %s", exc)
@@ -591,7 +601,9 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
             result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
             send_long_message(config.bot_token, chat_id, format_competitors(result, tracked_id), reply_to=message_id)
-            if is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):
+            # См. аналогичный комментарий в /робот выше: config_error не
+            # должен заказывать сетевую пересборку.
+            if not result.config_error and is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):
                 get_refresh_worker().request(university)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Competitors lookup failed: %s", exc)
@@ -678,12 +690,18 @@ def _prewarm_robot_pools_once() -> None:
     worker = get_refresh_worker()
     for university in robot_ready_universities():
         try:
-            # max_age=ROBOT_REFRESH_INTERVAL_SEC: свежесть здесь считается по
-            # периоду прогрева, а не по TTL пула (7200с) — иначе прогрев раз в
-            # 90 минут в двух третях случаев видел бы кэш ещё «свежим» по TTL
-            # и молча пропускал пересборку, и реальный период обновления
-            # растягивался бы до TTL.
-            worker.request(university, max_age=ROBOT_REFRESH_INTERVAL_SEC)
+            # max_age СТРОГО МЕНЬШЕ периода тика (ROBOT_REFRESH_INTERVAL_SEC),
+            # а не равен ему. fetched_at ставится в МОМЕНТ ЗАВЕРШЕНИЯ сборки
+            # (см. *_pool.py), поэтому на следующем тике возраст кэша всегда
+            # РОВНО period − D, где D>0 — длительность самой сборки. При
+            # max_age == period сравнение "возраст > max_age" всегда ложно
+            # (period − D никогда не больше period), и is_pool_stale() решает
+            # «кэш ещё свеж» на КАЖДОМ тике — прогрев тихо пропускает через
+            # один, а реальный период откатывается обратно к TTL (тот самый
+            # симптом, ради которого делался этот фикс). "// 2" — с запасом:
+            # даже если одна сборка займёт до половины периода, следующий тик
+            # всё равно её не спутает со «свежим» кэшем.
+            worker.request(university, max_age=ROBOT_REFRESH_INTERVAL_SEC // 2)
         except ValueError as exc:
             logger.warning("Заявка на прогрев %s отклонена: %s", university, exc)
     logger.info("Заявки на прогрев отправлены воркеру")
@@ -715,8 +733,8 @@ def main() -> int:
     offset = load_offset(OFFSET_PATH)
     logger.info("Бот запущен. offset=%s", offset)
 
-    # Прогрев роботов в фоне при старте и далее каждые ~2ч: бот сразу опрашивает
-    # Telegram, а пулы догреваются рядом и держатся свежими.
+    # Прогрев роботов в фоне при старте и далее каждые ~90 минут: бот сразу
+    # опрашивает Telegram, а пулы догреваются рядом и держатся свежими.
     threading.Thread(target=_robot_pool_refresh_loop, name="robot-pool-refresh", daemon=True).start()
 
     while True:
@@ -777,7 +795,11 @@ def main() -> int:
                 logger.error("Command failed for chat %s: %s", chat_id, exc)
                 try:
                     send_message(config.bot_token, int(chat_id), f"Ошибка: {exc}")
-                except TelegramAPIError:
+                except Exception:  # noqa: BLE001
+                    # НЕ except TelegramAPIError: сетевой сбой при повторной
+                    # отправке (ConnectionError/Timeout из requests) не заворачивается
+                    # в TelegramAPIError — не поймав его здесь, мы бы уронили
+                    # main() целиком (внешний while True это исключение не ловит).
                     pass
             except Exception as exc:
                 logger.exception("Command crashed for chat %s: %s", chat_id, exc)
