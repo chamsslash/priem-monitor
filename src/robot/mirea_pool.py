@@ -255,9 +255,30 @@ class MireaFullPool:
         return competitions
 
     @staticmethod
-    def _has_preferential_right(entrant: dict) -> bool:
-        # В API колонка «Преим. право» на сайте = поле pc (не iHP/iHPO — это «высший приоритет»).
-        return str(entrant.get("pc")) == "1"
+    def _is_bvi(entrant: dict) -> bool:
+        """Право поступить БЕЗ вступительных испытаний — поле isBVI.
+
+        Раньше сюда подставлялось поле pc («Преим. право»), и это ломало модель:
+        преимущественное право — всего лишь тай-брейк при РАВНЫХ баллах, а фаза
+        БВИ в каскаде занимает места вперёд всех независимо от балла. В итоге
+        1382 человека из 21611 (по 9 проверенным конкурсам) забирали бюджетные
+        места раньше тех, кто набрал больше, и проходной балл робота оказывался
+        на десятки баллов ниже реального: по МИРЭА в среднем 58 баллов разрыва
+        с проходным баллом сайта.
+
+        В бюджетном общем конкурсе isBVI=0 у всех: олимпиадники идут отдельным
+        конкурсом (compTypeId «5»), которого в пуле нет. Поле оставлено, а не
+        выброшено, чтобы модель не сломалась, если вуз начнёт помечать БВИ
+        прямо в общем конкурсе.
+        """
+        return str(entrant.get("isBVI")) == "1"
+
+    @staticmethod
+    def _enrolls_elsewhere(entrant: dict) -> bool:
+        """Сайт уже вычеркнул человека отсюда: «Исключен (зачислен на другой
+        конкурс)». Как «Зачисляется в другой КГ» у МЭИ — место, которое он тут
+        «занимает», на самом деле свободно."""
+        return "Исключен" in str(entrant.get("s") or "")
 
     @staticmethod
     def _merge_people(competitions: list[dict]) -> list[RobotPerson]:
@@ -274,9 +295,14 @@ class MireaFullPool:
                 if not code:
                     continue
                 consent = bool(entrant.get("accepted"))
-                is_bvi = MireaFullPool._has_preferential_right(entrant)
+                is_bvi = MireaFullPool._is_bvi(entrant)
                 priority = int(entrant.get("priority") or 99)
-                choice = ProgramChoice(program_key=comp_id, priority=priority or 99, is_bvi=is_bvi)
+                choice = ProgramChoice(
+                    program_key=comp_id,
+                    priority=priority or 99,
+                    is_bvi=is_bvi,
+                    enrolls_elsewhere=MireaFullPool._enrolls_elsewhere(entrant),
+                )
                 person = people.get(code)
                 if person is None:
                     people[code] = RobotPerson(

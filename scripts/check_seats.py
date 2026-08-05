@@ -35,12 +35,13 @@ if str(ROOT) not in sys.path:
 
 from src.robot.models import RobotProgram
 from src.robot.seat_oracle import SeatAudit, audit_university, check_no_paid_seats
-from src.robot.simulator import run_robot_simulation
+from src.robot.simulator import _passing_score_for_program, run_robot_simulation
 from src.robot.universities import (
     SUPPORTED_UNIVERSITIES,
     fetch_university_pool,
     read_cached_pool,
 )
+
 
 MARKS = {
     "ok": "OK  ",
@@ -49,6 +50,11 @@ MARKS = {
     "no_oracle": "-   ",
     "unavailable": "?   ",
 }
+
+
+def _pool_people(university: str) -> list:
+    cached = read_cached_pool(SUPPORTED_UNIVERSITIES[university])
+    return cached[0] if cached else []
 
 
 def _load_programs(university: str, *, fresh: bool) -> tuple[list[RobotProgram], str]:
@@ -84,6 +90,47 @@ def _print_paid(university: str, programs: list[RobotProgram]) -> bool:
     prefix = "платное" if ok else "ПЛАТНОЕ В ПУЛЕ"
     print(f"  {prefix}: {note}; итого {len(programs)} конкурсов, {total_places} мест")
     return ok
+
+
+def _print_cutoffs(university: str, programs: list[RobotProgram]) -> None:
+    """Проходной балл робота против проходного балла сайта по каждому направлению.
+
+    Более чувствительная проверка, чем сверка одного прогноза: она мерит не
+    «совпал/не совпал» на одном человеке, а насколько похоже робот и сайт
+    заполняют места вообще. Систематический сдвиг вниз означает, что каскад
+    пускает на места тех, кто по правде туда не проходит — так и нашлась
+    подмена БВИ преимущественным правом у МИРЭА (разрыв в 58 баллов).
+
+    Числа не обязаны совпадать в точности: робот считает только по подавшим
+    согласие, а сайт — по своему кругу участников. Смотреть надо на порядок
+    расхождения, а не на равенство.
+    """
+    result = run_robot_simulation(university, stale_ok=True)
+    if result.error:
+        return
+    site = {program.key: program.passing_cutoff for program in programs}
+    if not any(value is not None for value in site.values()):
+        return
+    states = {state.program_key: state for state in result.programs}
+    people_by_code = {person.code: person for person in _pool_people(university)}
+
+    diffs: list[int] = []
+    for key, site_cutoff in site.items():
+        state = states.get(key)
+        if state is None or not site_cutoff:
+            continue
+        robot_cutoff = _passing_score_for_program(state, people_by_code)
+        if robot_cutoff is not None:
+            diffs.append(robot_cutoff - site_cutoff)
+    if not diffs:
+        return
+    below = sum(1 for value in diffs if value < 0)
+    print(
+        f"  проходные баллы: {len(diffs)} направлений, "
+        f"средний сдвиг робота {sum(diffs) / len(diffs):+.1f}, "
+        f"макс |Δ| {max(abs(value) for value in diffs)}, "
+        f"ниже сайта {below}/{len(diffs)}"
+    )
 
 
 def _print_placement(university: str) -> bool:
@@ -140,6 +187,7 @@ def main() -> int:
             _print_seats(audits)
             problems += sum(1 for audit in audits if audit.is_problem)
 
+        _print_cutoffs(university, programs)
         if not _print_paid(university, programs):
             problems += 1
         if not _print_placement(university):
