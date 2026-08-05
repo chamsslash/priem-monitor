@@ -255,7 +255,7 @@ def _expand_row_cells(row) -> list[str]:
     return cells
 
 
-def _rows_and_meta_from_bacc(html: str) -> tuple[list[dict], int | None, int | None]:
+def _rows_and_meta_from_bacc(html: str) -> tuple[list[dict], int | None, int | None, int | None]:
     """Абитуриенты, «Количество вакантных мест» и проходной балл сайта со
     страницы волны зачисления (/inform/list<N>bacc.html, индекс — /inform/list).
 
@@ -331,10 +331,14 @@ def _rows_and_meta_from_bacc(html: str) -> tuple[list[dict], int | None, int | N
     # None — колонки вердикта не было (сверять не с чем); 0 — колонка есть, но
     # сюда не проходит никто (места открыты для любого балла).
     cutoff = (min(passing_scores) if passing_scores else 0) if has_top_column else None
-    return result, vacant, cutoff
+    # Сколько человек сайт отметил проходящими. Без этого числа проходной балл
+    # сайта нельзя интерпретировать: на направлении, где отмечен один человек
+    # из полусотни мест, «проходной» — это просто его балл, а не порог.
+    passing_count = len(passing_scores) if has_top_column else None
+    return result, vacant, cutoff, passing_count
 
 
-def fetch_list_rows_and_meta(list_id: str) -> tuple[list[dict], int | None, int | None]:
+def fetch_list_rows_and_meta(list_id: str) -> tuple[list[dict], int | None, int | None, int | None]:
     url = _bacc_url_for_list_id(list_id) or urljoin(CATALOG_URL, list_id)
     html = _get(url)
     return _rows_and_meta_from_bacc(html)
@@ -426,6 +430,7 @@ class MpeiFullPool:
         rows_by_list: dict[str, list[dict]] = {}
         cutoff_by_list: dict[str, int] = {}
         vacant_by_list: dict[str, int] = {}
+        passing_by_list: dict[str, int] = {}
         failed_lists: list[str] = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {
@@ -434,7 +439,7 @@ class MpeiFullPool:
             for future in as_completed(futures):
                 title, list_id = futures[future]
                 try:
-                    rows, vacant, cutoff = future.result()
+                    rows, vacant, cutoff, passing_count = future.result()
                 except Exception as exc:
                     failed_lists.append(list_id)
                     print(
@@ -450,6 +455,8 @@ class MpeiFullPool:
                     cutoff_by_list[list_id] = cutoff
                 if vacant is not None:
                     vacant_by_list[list_id] = vacant
+                if passing_count is not None:
+                    passing_by_list[list_id] = passing_count
 
         if catalog and len(failed_lists) / len(catalog) > MAX_FAILED_FRACTION:
             raise RuntimeError(
@@ -489,6 +496,7 @@ class MpeiFullPool:
                     seat_source=seat_source,
                     passing_cutoff=cutoff_by_list.get(list_id),
                     vacant_places=vacant_by_list.get(list_id),
+                    site_passing_count=passing_by_list.get(list_id),
                 )
             )
             for row in rows_by_list.get(list_id, []):

@@ -128,6 +128,32 @@ def _print_transfers(programs: list[RobotProgram]) -> None:
     print(f"  итого: +{gained} мест из незаполненных квот, −{lost} уже занято прошлыми приказами")
 
 
+# Доля мест, которую сайт должен САМ отметить проходящими, чтобы его проходной
+# балл имел смысл порога. Ниже неё сравнивать нечего: на «Международной экономике
+# и торговле» ФА сайт отметил ОДНОГО человека на 52 места, и «проходной балл 310»
+# — это просто его балл. Такие направления тянули среднюю метрику в минус на 8
+# баллов и маскировали настоящие расхождения.
+_ORACLE_FULL_RATIO = 0.5
+
+
+def _oracle_is_full(program: RobotProgram) -> bool:
+    """Можно ли считать вердикт сайта по направлению полным.
+
+    Сравниваем с местами ВОЛНЫ, если вуз их публикует, и только иначе — с
+    плановым КЦП. У МЭИ число отмеченных проходящими равно числу вакантных мест
+    ровно (75=75, 170=170): сайт заполняет именно волну, а не план. Сравнение с
+    планом выбросило бы из метрики «Фундаментальную информатику», где на волне
+    6 мест против 13 плановых, хотя вердикт там как раз полный.
+
+    Нет счётчика проходящих (вуз его не публикует) — считаем полным: это
+    прежнее поведение, и лучше лишний раз показать расхождение, чем спрятать.
+    """
+    seats = program.vacant_places if program.vacant_places is not None else program.budget_places
+    if program.site_passing_count is None or not seats:
+        return True
+    return program.site_passing_count >= _ORACLE_FULL_RATIO * seats
+
+
 def _print_cutoffs(university: str, programs: list[RobotProgram]) -> None:
     """Проходной балл робота против проходного балла сайта по каждому направлению.
 
@@ -144,29 +170,38 @@ def _print_cutoffs(university: str, programs: list[RobotProgram]) -> None:
     result = run_robot_simulation(university, stale_ok=True)
     if result.error:
         return
-    site = {program.key: program.passing_cutoff for program in programs}
-    if not any(value is not None for value in site.values()):
+    if not any(program.passing_cutoff is not None for program in programs):
         return
     states = {state.program_key: state for state in result.programs}
     people_by_code = {person.code: person for person in _pool_people(university)}
 
-    diffs: list[int] = []
-    for key, site_cutoff in site.items():
-        state = states.get(key)
-        if state is None or not site_cutoff:
+    full: list[int] = []
+    thin: list[int] = []
+    for program in programs:
+        state = states.get(program.key)
+        if state is None or not program.passing_cutoff:
             continue
         robot_cutoff = _passing_score_for_program(state, people_by_code)
-        if robot_cutoff is not None:
-            diffs.append(robot_cutoff - site_cutoff)
-    if not diffs:
-        return
-    below = sum(1 for value in diffs if value < 0)
-    print(
-        f"  проходные баллы: {len(diffs)} направлений, "
-        f"средний сдвиг робота {sum(diffs) / len(diffs):+.1f}, "
-        f"макс |Δ| {max(abs(value) for value in diffs)}, "
-        f"ниже сайта {below}/{len(diffs)}"
-    )
+        if robot_cutoff is None:
+            continue
+        diff = robot_cutoff - program.passing_cutoff
+        (full if _oracle_is_full(program) else thin).append(diff)
+
+    if full:
+        below = sum(1 for value in full if value < 0)
+        print(
+            f"  проходные баллы (вердикт сайта полный): {len(full)} направлений, "
+            f"средний сдвиг робота {sum(full) / len(full):+.1f}, "
+            f"макс |Δ| {max(abs(value) for value in full)}, "
+            f"ниже сайта {below}/{len(full)}"
+        )
+    if thin:
+        print(
+            f"  проходные баллы (вердикт сайта почти пуст): {len(thin)} направлений "
+            f"исключены из метрики — сайт отметил проходящими меньше "
+            f"{int(_ORACLE_FULL_RATIO * 100)}% мест, его «проходной балл» там не порог, "
+            "а балл одного-двух отмеченных"
+        )
 
 
 def _print_placement(university: str) -> bool:

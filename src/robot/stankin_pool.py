@@ -202,6 +202,18 @@ def _passing_cutoff(rows: list[dict]) -> int | None:
     return min(scores) if scores else 0
 
 
+def _passing_count(rows: list[dict]) -> int | None:
+    """Сколько человек сайт отметил проходящими сюда.
+
+    Без этого числа проходной балл сайта нельзя интерпретировать: если на
+    полусотне мест отмечен один человек, «проходной» — это просто его балл, а
+    не порог, и сравнивать с ним прогноз робота бессмысленно.
+    """
+    if not any(row.get("top_passing") is not None for row in rows):
+        return None
+    return sum(1 for row in rows if row.get("top_passing") is True)
+
+
 def _fetch_direction_pages(direction: str) -> tuple[list[dict], list[int]]:
     """Все страницы направления: (строки, сколько строк дала каждая страница)."""
     rows: list[dict] = []
@@ -468,6 +480,7 @@ class StankinFullPool:
                     tracked_id=tracked_id,
                     seat_source=seat_source,
                     passing_cutoff=_passing_cutoff(rows_by_direction.get(direction, [])),
+                    site_passing_count=_passing_count(rows_by_direction.get(direction, [])),
                 )
             )
 
