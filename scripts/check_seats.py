@@ -104,28 +104,45 @@ def _print_transfers(programs: list[RobotProgram]) -> None:
     приказами. Это не ошибка и не повод менять вход каскада, а контекст: он
     показывает, насколько основной прогноз пессимистичен.
     """
-    rows = [program for program in programs if program.vacant_places is not None]
+    rows = [
+        program
+        for program in programs
+        if program.vacant_places is not None or program.quota_shortfall is not None
+    ]
     if not rows:
         return
-    print(f"  {'напр. (места волны против плана)':<52} {'план':>5} {'волна':>6} {'Δ':>5}")
-    for program in sorted(rows, key=lambda item: -(item.vacant_places - (item.budget_places or 0))):
-        planned = program.budget_places
-        delta = f"{program.vacant_places - planned:+d}" if planned is not None else "—"
+    print(
+        f"  {'напр. (предикт против плана и волны)':<52} "
+        f"{'план':>5} {'недоб':>6} {'предикт':>8} {'волна':>6} {'Δ':>5}"
+    )
+    for program in sorted(rows, key=lambda item: -(item.quota_shortfall or 0)):
+        predicted = program.predicted_places
+        # Δ — расхождение НАШЕГО предиктa с тем, что вуз выставил на волну.
+        # Это перекрёстная проверка предикта, а не ошибка: часть мест бывает
+        # уже занята прошлыми приказами, и волна оказывается ниже предикта.
+        if predicted is not None and program.vacant_places is not None:
+            delta = f"{predicted - program.vacant_places:+d}"
+        else:
+            delta = "—"
         print(
-            f"  {program.title[:51]:<52} {str(planned):>5} "
-            f"{program.vacant_places:>6} {delta:>5}"
+            f"  {program.title[:51]:<52} {str(program.budget_places):>5} "
+            f"{str(program.quota_shortfall):>6} {str(predicted):>8} "
+            f"{str(program.vacant_places):>6} {delta:>5}"
         )
-    gained = sum(
-        program.vacant_places - program.budget_places
+    shortfall = sum(program.quota_shortfall or 0 for program in rows)
+    checked = [
+        abs(program.predicted_places - program.vacant_places)
         for program in rows
-        if program.budget_places is not None and program.vacant_places > program.budget_places
-    )
-    lost = sum(
-        program.budget_places - program.vacant_places
-        for program in rows
-        if program.budget_places is not None and program.vacant_places < program.budget_places
-    )
-    print(f"  итого: +{gained} мест из незаполненных квот, −{lost} уже занято прошлыми приказами")
+        if program.predicted_places is not None and program.vacant_places is not None
+    ]
+    line = f"  итого: +{shortfall} мест возвращено из незаполненных квот"
+    if checked:
+        exact = sum(1 for value in checked if value == 0)
+        line += (
+            f"; предикт против волны: точно на {exact}/{len(checked)}, "
+            f"средняя ошибка {sum(checked) / len(checked):.1f}, макс {max(checked)}"
+        )
+    print(line)
 
 
 # Доля мест, которую сайт должен САМ отметить проходящими, чтобы его проходной
