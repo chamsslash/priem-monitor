@@ -466,9 +466,14 @@ def _build_optimistic(
     # основной сверке, — чтобы «совпал/не совпал» значило одно и то же в обоих
     # местах ответа.
     site_key = _site_placement(programs, dima, dima.score)
+    # Ничья: оракул селит Диму туда, где проходной РОВНО равен его баллу. Там
+    # исход не определён, и расхождение вердиктов — не ошибка модели.
+    cutoffs = {program.key: program.passing_cutoff for program in programs}
+    tied = site_key is not None and cutoffs.get(site_key) == dima.score
     placed_key = run.dima_placed_program_key
     return OptimisticOutlook(
         site_key=site_key,
+        tied=tied,
         transfers=sorted(transfers, key=lambda item: -item.delta),
         placed_program_key=placed_key,
         placed_title=display_titles.get(placed_key, run.dima_placed_title) if placed_key else None,

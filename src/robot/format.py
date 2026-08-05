@@ -123,9 +123,10 @@ def _format_site_verdict(result: RobotSimulationResult) -> list[str]:
         return ["  Оракул сайта: то же самое ✅"]
     if placement.status == "boundary":
         return [
-            f"  Оракул сайта: {site} ⚖️",
-            "  Расходимся только на границе: ваш балл РАВЕН проходному, "
-            "а при равном балле проходит не каждый",
+            f"  Оракул сайта: {site} ⚖️ — но это НИЧЬЯ, а не расхождение",
+            "  Ваш балл ровно равен проходному. При равенстве проходят не все: "
+            "спор решают профильные предметы и преимущественное право, и исход "
+            "не определён ни нашей моделью, ни порогом сайта",
         ]
     return [
         f"  ⚠️ Оракул сайта: {site}",
@@ -144,6 +145,10 @@ def _format_oracle(item: DimaPrioritySnapshot, score: int) -> str:
     if item.site_cutoff is None:
         return ""
     threshold = "любой балл" if item.site_cutoff == 0 else f"проходной {item.site_cutoff}"
+    if item.is_tie(score):
+        # Ничья, а не расхождение: балл ровно равен проходному, и исход тут не
+        # определён — при равенстве проходит не каждый.
+        return f" · сайт: {threshold} ⚖️ ВАШ БАЛЛ РОВНО НА ГРАНИ"
     mark = "✅" if item.site_lets_in(score) else "❌"
     flag = " ⚠️расхождение" if item.agrees_with_site(score) is False else ""
     return f" · сайт: {threshold} {mark}{flag}"
@@ -188,11 +193,12 @@ def _format_optimistic(result: RobotSimulationResult) -> list[str]:
         )
     # Именно этот каскад считает на местах, приближенных к реальным, поэтому
     # сходиться с оракулом должен он — по нему и судим, попали мы или нет.
-    lines.append(
-        "  Сходится с оракулом сайта ✅"
-        if outlook.matches_site
-        else "  ⚠️ С оракулом сайта не сходится"
-    )
+    if outlook.tied and outlook.placed_program_key != outlook.site_key:
+        lines.append("  Сходится с оракулом сайта с точностью до ничьей ⚖️")
+    elif outlook.matches_site:
+        lines.append("  Всё сошлось с оракулом сайта ✅")
+    else:
+        lines.append("  ⚠️ С оракулом сайта не сходится")
     if outlook.placed_program_key != result.dima_placed_program_key:
         lines.append("  (от основного прогноза отличается — там места считаются строго по КЦП)")
     return lines
@@ -234,7 +240,10 @@ def format_robot_result(result: RobotSimulationResult) -> str:
         lines.append(f"Учитываются приоритеты ({len(result.dima_remaining_at_turn)}):")
         okso_by_id = _okso_by_tracked_id()
         disagreements = 0
+        ties = 0
         for item in result.dima_remaining_at_turn:
+            if item.is_tie(result.dima_score):
+                ties += 1
             okso = okso_by_id.get(item.tracked_id) if item.tracked_id is not None else None
             prefix = f"{okso} " if okso else ""
             suffix = f" (код {item.tracked_id})" if item.tracked_id is not None else ""
@@ -250,6 +259,13 @@ def format_robot_result(result: RobotSimulationResult) -> str:
                 f"  {item.priority}. {prefix}{item.title}{suffix}: "
                 f"осталось {item.remaining_at_turn}/{item.budget_places} "
                 f"(занято {taken}) {status}{oracle}"
+            )
+        if ties:
+            lines.append(
+                f"  ⚖️ На {ties} направлении(ях) ваш балл РОВНО равен проходному. "
+                "Это тонкое место: при равенстве баллов проходят не все — "
+                "спор решают баллы по профильным предметам и преимущественное "
+                "право, и предсказать исход нельзя. Считайте это «может быть»."
             )
         if disagreements:
             lines.append(

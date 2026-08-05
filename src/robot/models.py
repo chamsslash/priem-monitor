@@ -149,10 +149,23 @@ class DimaPrioritySnapshot:
             return None
         return score >= self.site_cutoff
 
+    def is_tie(self, score: int) -> bool:
+        """Балл РОВНО равен проходному — исход тут не определён никакой моделью.
+
+        Проходной балл сайта — это минимальный балл среди прошедших, поэтому при
+        равенстве часть таких абитуриентов проходит, а часть нет: спор решают
+        баллы по профильным предметам и преимущественное право. Считать это
+        ошибкой робота неверно, молчать — тоже: человеку важно знать, что он
+        стоит ровно на грани.
+        """
+        return self.site_cutoff is not None and self.site_cutoff == score
+
     def agrees_with_site(self, score: int) -> bool | None:
-        """Сходятся ли робот и сайт по этому направлению. None — сверять не с чем."""
+        """Сходятся ли робот и сайт. None — сверять не с чем либо ничья."""
         site = self.site_lets_in(score)
-        return None if site is None else site == self.can_enter
+        if site is None or self.is_tie(score):
+            return None
+        return site == self.can_enter
 
 
 @dataclass
@@ -233,6 +246,9 @@ class OptimisticOutlook:
     # реальным, поэтому именно ЕГО вердикт и должен сходиться с сайтом — по
     # нему и видно, попали мы или нет.
     site_key: str | None = None
+    # Вердикты разошлись только из-за ничьей: балл ровно равен проходному, и
+    # исход там не определён. Считать это несовпадением моделей неверно.
+    tied: bool = False
 
     @property
     def gained_places(self) -> int:
@@ -240,7 +256,7 @@ class OptimisticOutlook:
 
     @property
     def matches_site(self) -> bool:
-        return self.placed_program_key == self.site_key
+        return self.placed_program_key == self.site_key or self.tied
 
 
 @dataclass
