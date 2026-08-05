@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import re
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,8 +22,16 @@ from .models import ProgramChoice, RobotPerson, RobotProgram
 
 LIST_URL = "https://www.fa.ru/spiski/listabit.php"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+# Ровно те параметры, с которыми listabit.php встроен на официальную страницу
+# конкурсных списков бакалавриата (/for-applicants/bachelor/Rateabit/applications.php).
+# Параметр уровня называется type_list: раньше здесь стояло itype_list, и сервер
+# его молча игнорировал — каталог приезжал по ВСЕМ уровням (144 значения вместо
+# 82), а до бакалавриата его доводил только фильтр по названию
+# (_is_bachelor_day_title). Итог совпадал, но держался на подстроке «, Бакалавр,»
+# в названии программы. Фильтр оставлен как вторая линия: он отсекает ДОТ,
+# очно-заочные и заочные, которых в выдаче хватает и с правильным уровнем.
 BASE_PARAMS = {
-    "itype_list": "бкл",
+    "type_list": "бкл",
     "type_conkurs": "Общий конкурс",
     "form_pay": "Бюджет",
 }
@@ -34,6 +44,121 @@ MAX_WORKERS = 6
 FETCH_RETRIES = 3
 RETRYABLE_STATUS = {500, 502, 503, 504}
 UNTRACKED_FALLBACK_PLACES = 30  # аппроксимация мест ТОЛЬКО для непрофильных untracked-программ каталога ФА (вне охвата гарантии реальных мест)
+
+KCP_PAGE_URL = "https://www.fa.ru/for-applicants/bachelor/control/"
+# Секция приказа, которая нас касается. Всё остальное — заочные, очно-заочные,
+# ДОТ и филиалы; в бюджетный очный конкурс они не входят, а программы там
+# называются так же, и без фильтра по секции затирали бы московские числа.
+KCP_SECTION = "Бакалавриат (очная форма обучения, г. Москва)"
+_KCP_SECTION_PREFIXES = ("Бакалавриат (", "Специалитет (", "Магистратура (")
+_KCP_SECTION_MARKER = "филиал Финуниверситета"
+
+
+def _kcp_norm(value: str | None) -> str:
+    return " ".join(str(value or "").replace("\n", " ").split())
+
+
+def _kcp_match_key(direction: str, program: str) -> str:
+    """Ключ сопоставления строки приказа со строкой каталога списков.
+
+    Сравниваем без пробелов и регистра: в PDF слова рвутся переносами
+    («информационно- аналитических»), а в каталоге пишутся слитно.
+    """
+    direction_name = re.sub(r"^\d{2}\.\d{2}\.\d{2}\s*", "", _kcp_norm(direction))
+    return re.sub(r"\s+", "", f"{direction_name}|{_kcp_norm(program)}").lower()
+
+
+def _kcp_pdf_url() -> str:
+    """Ссылка на действующий приказ о КЦП — со страницы, а не захардкоженная:
+    в пути файла лежит хеш, который меняется при каждой перепубликации."""
+    html = _session().get(KCP_PAGE_URL, timeout=60).text
+    soup = BeautifulSoup(html, "lxml")
+    for link in soup.find_all("a", href=True):
+        href = link["href"]
+        if href.lower().endswith(".pdf") and "ktsp" in href.lower():
+            return href if href.startswith("http") else f"https://www.fa.ru{href}"
+    raise ValueError(f"На {KCP_PAGE_URL} не найдена ссылка на PDF с КЦП")
+
+
+def parse_kcp_pdf(data: bytes) -> dict[str, int]:
+    """Приказ о КЦП → {ключ сопоставления: места общего конкурса}.
+
+    Места общего конкурса = всего мест − отдельная − особая − целевая квота.
+
+    Две тонкости разбора:
+
+    * **Секции идут подряд, заголовок может стоять НИЖЕ таблицы** на той же
+      странице (так «очно-заочная ДОТ» начинается на странице очной Москвы).
+      Поэтому идём по странице по порядку сверху вниз, переключая секцию на
+      каждом заголовке, а не решаем по странице целиком — иначе строки чужих
+      секций затирают наши программы с такими же названиями.
+    * **Целевая квота размазана по строкам**: у программы с несколькими
+      целевыми организациями каждая занимает свою строку, где заполнена только
+      колонка целевой квоты. Такие строки суммируются к текущей программе,
+      иначе целевая квота занижается, а общий конкурс завышается.
+    """
+    import pdfplumber
+
+    quotas: dict[str, list[int]] = {}  # ключ -> [всего, отдельная, особая, целевая]
+    in_section = False
+    current_key: str | None = None
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        for page in pdf.pages:
+            events: list[tuple[float, str, object]] = []
+            for line in page.extract_text_lines() or []:
+                text = _kcp_norm(line["text"])
+                if text.startswith(_KCP_SECTION_PREFIXES) or _KCP_SECTION_MARKER in text:
+                    events.append((line["top"], "section", text))
+            for table in page.find_tables():
+                events.append((table.bbox[1], "table", table))
+
+            for _, kind, payload in sorted(events, key=lambda item: item[0]):
+                if kind == "section":
+                    in_section = payload == KCP_SECTION
+                    current_key = None
+                    continue
+                if not in_section:
+                    continue
+                for row in payload.extract():
+                    cells = [_kcp_norm(cell) for cell in row] + [""] * 6
+                    direction, program, total, separate, special, target = cells[:6]
+                    if direction == "Всего":
+                        current_key = None
+                        continue
+                    if direction and program and total.isdigit():
+                        current_key = _kcp_match_key(direction, program)
+                        quotas[current_key] = [
+                            int(total),
+                            _kcp_int(separate),
+                            _kcp_int(special),
+                            _kcp_int(target),
+                        ]
+                    elif current_key and not direction and not program and target.isdigit():
+                        # Продолжение: ещё одна целевая организация той же программы.
+                        quotas[current_key][3] += int(target)
+    if not quotas:
+        raise ValueError(f"В приказе о КЦП не найдена секция «{KCP_SECTION}»")
+    return {key: max(row[0] - row[1] - row[2] - row[3], 0) for key, row in quotas.items()}
+
+
+def _kcp_int(value: str) -> int:
+    return int(value) if value.isdigit() else 0
+
+
+def _catalog_match_key(title: str) -> str | None:
+    """«Прикладная информатика, Бакалавр, Прикладные ИС…, Очная» → ключ приказа."""
+    match = re.match(r"^(.*?),\s*Бакалавр,\s*(.*?),\s*Очная\s*$", title, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    return _kcp_match_key(match.group(1), match.group(2))
+
+
+def fetch_kcp_places() -> dict[str, int]:
+    """Места общего конкурса по программам очного московского бакалавриата из
+    действующего приказа о КЦП. Ключ — название программы как в каталоге списков."""
+    data = _session().get(_kcp_pdf_url(), timeout=120).content
+    return parse_kcp_pdf(data)
+
 
 # Места для программ вне config/programs.json (с сайта fa.ru, раздел программ).
 FA_PLACES_OVERRIDES: dict[str, int] = {
@@ -85,6 +210,17 @@ class FaFullPool:
     # оракул для сверки прогноза. Колонки может не быть (другая стадия приёма) —
     # тогда сверять не с чем, и это не повод ронять сборку.
     TOP_PASSING_LABEL = "Высший проходной приоритет"
+    # Колонка кампуса. В одном конкурсном списке ФА лежат абитуриенты головного
+    # вуза И филиалов: у московских здесь факультет («Факультет информационных
+    # технологий и анализа больших данных»), у филиальских — «<Город> филиал
+    # ФГОБУ ВО …». Места мы берём московские (приказ, секция «Бакалавриат
+    # (очная форма обучения, г. Москва)»), поэтому и конкурентов надо брать
+    # московских — иначе филиальские абитуриенты воюют за московские места.
+    # Замер на «Прикладных ИС в экономике и финансах»: 3239 строк всего, из них
+    # 119 алтайских; вместе сайт отмечает проходящими 78 человек с порогом 205,
+    # а по одной Москве — 59 с порогом 267 (мест 62). Без фильтра число
+    # проходящих выглядит больше числа мест, и это ложная тревога.
+    BRANCH_LABEL = "Факультет/филиал"
 
     def build(self, *, use_cache: bool = True) -> tuple[list[RobotPerson], list[RobotProgram], str, bool]:
         if use_cache:
@@ -96,7 +232,7 @@ class FaFullPool:
             catalog = self._catalog_from_api()
             rows = self._fetch_all_rows(catalog)
             people = self._merge_people(rows)
-            programs = self._build_programs(catalog, self._site_verdict(rows))
+            programs = self._build_programs(catalog, self._site_verdict(rows), self._safe_kcp())
             fetched_at = datetime.now(timezone.utc).isoformat()
             self._save_cache(people, programs, fetched_at)
             return people, programs, fetched_at, False
@@ -246,6 +382,8 @@ class FaFullPool:
             code = fields[self.FIELD_LABELS["code"]].strip()
             if not code:
                 continue
+            if "филиал" in (fields.get(self.BRANCH_LABEL) or "").lower():
+                continue
             top_passing = fields.get(self.TOP_PASSING_LABEL)
             rows.append(
                 {
@@ -305,26 +443,52 @@ class FaFullPool:
             person.is_bvi = person.has_bvi_choice()
         return list(people.values())
 
+    @staticmethod
+    def _safe_kcp() -> dict[str, int]:
+        """Приказ о КЦП, но его недоступность не должна ронять сборку пула:
+        без него места откатятся на config, и сверка подсветит это как «не live»."""
+        try:
+            return fetch_kcp_places()
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"ВНИМАНИЕ: не удалось получить приказ о КЦП ФА ({exc}) — места взяты "
+                "из резерва config/заглушки.",
+                file=sys.stderr,
+            )
+            return {}
+
     def _build_programs(
-        self, catalog: list[str], verdict: dict[str, tuple[int, int]]
+        self,
+        catalog: list[str],
+        verdict: dict[str, tuple[int, int]],
+        kcp: dict[str, int],
     ) -> list[RobotProgram]:
+        """Источники мест по убыванию доверия: приказ о КЦП → config → заглушка.
+
+        Приказ (`fetch_kcp_places`) закрывает все очные московские программы
+        разом, поэтому config и заглушка «30 мест» остаются только аварийным
+        путём — на случай, если приказ не скачался или вуз переименовал
+        программу так, что она не сопоставилась.
+        """
         tracked = _tracked_title_map()
         places = _places_map()
         programs: list[RobotProgram] = []
         for title in catalog:
-            # У ФА нет машинного источника мест: fa.ru отдаёт конкурсные списки,
-            # но не КЦП. Провенанс проставляем честно — «config» для чисел,
-            # снятых вручную с официального КЦП, «approx» для грубой
-            # аппроксимации непрофильных направлений. Живого источника («live»)
-            # здесь не бывает, и сверка мест не должна делать вид, что бывает.
+            official = kcp.get(_catalog_match_key(title) or "")
             known = places.get(title)
+            if official is not None:
+                seats, seat_source = official, "live"
+            elif known is not None:
+                seats, seat_source = known, "config"
+            else:
+                seats, seat_source = UNTRACKED_FALLBACK_PLACES, "approx"
             programs.append(
                 RobotProgram(
                     key=title,
                     title=title,
-                    budget_places=known if known is not None else UNTRACKED_FALLBACK_PLACES,
+                    budget_places=seats,
                     tracked_id=tracked.get(title),
-                    seat_source="config" if known is not None else "approx",
+                    seat_source=seat_source,
                     passing_cutoff=verdict[title][0] if title in verdict else None,
                     site_passing_count=verdict[title][1] if title in verdict else None,
                 )
