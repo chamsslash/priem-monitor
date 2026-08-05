@@ -410,15 +410,19 @@ def _build_optimistic(
 ) -> OptimisticOutlook | None:
     """Прогон каскада на местах, реально выставленных на волну.
 
-    Разница с основным прогоном ровно одна: места берутся из
-    `vacant_places` (сколько мест вуз открыл на эту волну) вместо планового
-    КЦП общего конкурса. Незаполненные квоты вуз возвращает в общий конкурс, и
-    на волне мест обычно больше — но не всегда: часть мест бывает уже занята
-    прошлыми приказами, и тогда их меньше планового (на «Фундаментальной
-    информатике» МЭИ 6 против 13 по плану).
+    Разница с основным прогоном ровно одна: места берутся с учётом КВОТНЫХ
+    НЕДОБОРОВ. Незанятые квотные места вуз возвращает в общий конкурс, и число
+    мест на волне обычно больше планового КЦП.
 
-    Возвращает None, когда сравнивать нечего: вуз не публикует вакантные места
-    (все, кроме МЭИ) либо они везде совпали с плановыми.
+    Недобор считается НАМИ (`quota_shortfall`: официальный КЦП по видам квот
+    минус зачисленные по квотным спискам), а не берётся из «вакантных мест»
+    волны. Разница принципиальная: вакантных мест ровно столько же, сколько
+    людей сайт уже отметил проходящими, то есть это готовый ответ; недобор же
+    выведен из данных, ответа не содержащих. Число волны кладём рядом
+    справочно — как перекрёстную проверку предикта.
+
+    Возвращает None, когда считать нечего: вуз не публикует квотные списки либо
+    недобора нигде нет.
     """
     dima_keys = {choice.program_key for choice in dima.choices}
     transfers = [
@@ -426,16 +430,17 @@ def _build_optimistic(
             program_key=program.key,
             title=display_titles.get(program.key, program.title),
             planned=program.budget_places,
-            actual=program.vacant_places,
+            actual=program.predicted_places,
+            site_actual=program.vacant_places,
         )
         for program in programs
         if program.key in dima_keys
-        and program.vacant_places is not None
-        and program.budget_places is not None
-        and program.vacant_places != program.budget_places
+        and program.predicted_places is not None
+        and program.predicted_places != program.budget_places
     ]
     if not any(
-        program.vacant_places is not None and program.vacant_places != program.budget_places
+        program.predicted_places is not None
+        and program.predicted_places != program.budget_places
         for program in programs
     ):
         return None
@@ -444,8 +449,8 @@ def _build_optimistic(
     # Димы: конкуренты распределяются по всему вузу, и лишнее место на чужом
     # направлении уводит оттуда человека, который иначе давил бы на приоритеты Димы.
     optimistic_programs = [
-        replace(program, budget_places=program.vacant_places)
-        if program.vacant_places is not None
+        replace(program, budget_places=program.predicted_places)
+        if program.predicted_places is not None
         else program
         for program in programs
     ]

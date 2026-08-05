@@ -45,16 +45,28 @@ def _extract_list_id(text: str) -> str | None:
     return match.group(0) if match else None
 
 
-def _catalog_from_page(html: str) -> list[tuple[str, str]]:
-    """Возвращает [(название конкурсной группы, entrants_listNNN.html)]
-    для бюджетных очных бакалаврских/специалитетных направлений."""
+# Классы ссылок на квотные списки в каталоге МЭИ. Общий конкурс — ссылка ровно
+# с ["competitive-group", "listFilterBudget"]; у квотных списков к этому набору
+# добавлен свой маркер вида квоты.
+_QUOTA_LINK_CLASSES = {
+    "listFilterSpecial": "special",
+    "listFilterSeparate": "separate",
+    "listFilterTarget": "target",
+}
+
+
+def _catalog_section(html: str) -> BeautifulSoup:
     start = html.find(_SECTION_START)
     if start == -1:
         raise ValueError(f"Не найдена секция «{_SECTION_START}»")
     end = html.find(_SECTION_END, start)
-    section = html[start:end] if end != -1 else html[start:]
+    return BeautifulSoup(html[start:end] if end != -1 else html[start:], "lxml")
 
-    soup = BeautifulSoup(section, "lxml")
+
+def _catalog_from_page(html: str) -> list[tuple[str, str]]:
+    """Возвращает [(название конкурсной группы, entrants_listNNN.html)]
+    для бюджетных очных бакалаврских/специалитетных направлений."""
+    soup = _catalog_section(html)
     catalog: list[tuple[str, str]] = []
     for row in soup.find_all("tr"):
         cells = row.find_all("td")
@@ -73,6 +85,34 @@ def _catalog_from_page(html: str) -> list[tuple[str, str]]:
     if not catalog:
         raise ValueError("Каталог бюджетных очных направлений МЭИ пуст")
     return catalog
+
+
+def quota_lists_from_page(html: str) -> dict[str, dict[str, list[str]]]:
+    """Название конкурсной группы → {вид квоты: [entrants_listNNN.html, ...]}.
+
+    Целевая квота почти всегда представлена НЕСКОЛЬКИМИ списками — по одному на
+    заказчика целевого обучения, поэтому значение здесь список, а не строка.
+    """
+    soup = _catalog_section(html)
+    result: dict[str, dict[str, list[str]]] = {}
+    for row in soup.find_all("tr"):
+        cells = row.find_all("td")
+        if len(cells) < 2:
+            continue
+        title = cells[0].get_text(" ", strip=True)
+        if not title:
+            continue
+        for link in cells[1].find_all("a"):
+            classes = set(link.get("class") or [])
+            if "listFilterBudget" not in classes:
+                continue
+            kind = next((k for cls, k in _QUOTA_LINK_CLASSES.items() if cls in classes), None)
+            if kind is None:
+                continue
+            list_id = _extract_list_id(link.get("href", ""))
+            if list_id:
+                result.setdefault(title, {}).setdefault(kind, []).append(list_id)
+    return result
 
 
 def _get(url: str) -> str:
@@ -120,6 +160,14 @@ class KcpGroup:
     quotas: int  # особая + отдельная + целевая
     general: int  # места общего конкурса = КЦП − квоты
     rows: int  # строк-профилей в группе (>1 — многопрофильная)
+    # Квоты по видам. Нужны по отдельности, а не суммой: недобор считается по
+    # каждому виду своим списком (у особой, отдельной и целевой квот они разные).
+    special: int = 0
+    separate: int = 0
+    target: int = 0
+
+    def quota_places(self, kind: str) -> int:
+        return {"special": self.special, "separate": self.separate, "target": self.target}[kind]
 
 
 def _expand_table(table) -> list[list[str]]:
@@ -204,18 +252,30 @@ def parse_kcp_page(html: str) -> dict[str, KcpGroup]:
             continue
         try:
             kcp = int(row[columns["kcp"]])
-            quotas = sum(int(row[columns[name]]) for name in ("special", "separate", "target"))
+            by_kind = {name: int(row[columns[name]]) for name in ("special", "separate", "target")}
+            quotas = sum(by_kind.values())
         except (ValueError, IndexError):
             continue
         title = " ".join(title.replace("\xa0", " ").split())
         group = groups.get(title)
         if group is None:
-            groups[title] = KcpGroup(kcp=kcp, quotas=quotas, general=kcp - quotas, rows=1)
+            groups[title] = KcpGroup(
+                kcp=kcp,
+                quotas=quotas,
+                general=kcp - quotas,
+                rows=1,
+                special=by_kind["special"],
+                separate=by_kind["separate"],
+                target=by_kind["target"],
+            )
             continue
         group.kcp += kcp
         group.quotas += quotas
         group.general += kcp - quotas
         group.rows += 1
+        group.special += by_kind["special"]
+        group.separate += by_kind["separate"]
+        group.target += by_kind["target"]
     if not groups:
         raise ValueError("Не удалось извлечь ни одной конкурсной группы из таблицы КЦП МЭИ")
     return groups
@@ -355,6 +415,70 @@ def fetch_list_vacant(list_id: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+QUOTA_URL_TEMPLATE = "https://pk.mpei.ru/info/{list_id}"
+
+
+def fetch_quota_enrolled(list_id: str) -> int:
+    """Сколько человек РЕАЛЬНО зачислено по этому квотному списку.
+
+    Квотные списки лежат по другому адресу, чем списки общего конкурса:
+    /info/entrants_listNNN.html вместо /inform/listNNNbacc.html (последний на
+    квотном id молча отдаёт индексную страницу). Считаем отметки «Высший
+    проходной» — это вердикт вуза по КВОТНОМУ конкурсу, отдельному от общего.
+    """
+    soup = BeautifulSoup(_get(QUOTA_URL_TEMPLATE.format(list_id=list_id)), "lxml")
+    tables = soup.find_all("table")
+    if not tables:
+        return 0
+    rows = max(tables, key=lambda item: len(item.find_all("tr"))).find_all("tr")
+    if len(rows) < 3:
+        return 0
+    headers = _expand_row_cells(rows[0])
+    top_idx = header_index(headers, "высший проходной")
+    if top_idx is None:
+        return 0
+    return sum(
+        1
+        for row in rows[2:]
+        if len(cells := _expand_row_cells(row)) > top_idx and normalize_yes(cells[top_idx])
+    )
+
+
+@dataclass
+class QuotaShortfall:
+    """Недобор по квотам одной конкурсной группы.
+
+    Зачем считать самим, а не читать «вакантные места» со страницы волны:
+    вакантные места — это уже ответ сайта (их ровно столько же, сколько людей
+    он отметил проходящими), и каскад, взяв их на вход,сверять было бы не с
+    чем. Недобор же выводится из НЕЗАВИСИМЫХ данных: официальный КЦП по видам
+    квот минус фактически зачисленные по квотным спискам. Это наш собственный
+    вывод, а не подсказка вуза.
+    """
+
+    special: int = 0
+    separate: int = 0
+    target: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.special + self.separate + self.target
+
+
+def compute_quota_shortfall(
+    group: KcpGroup, lists_by_kind: dict[str, list[str]]
+) -> QuotaShortfall:
+    """Незанятые квотные места, которые вуз возвращает в общий конкурс."""
+    shortfall = QuotaShortfall()
+    for kind in ("special", "separate", "target"):
+        places = group.quota_places(kind)
+        if places <= 0:
+            continue
+        enrolled = sum(fetch_quota_enrolled(list_id) for list_id in lists_by_kind.get(kind, []))
+        setattr(shortfall, kind, max(places - enrolled, 0))
+    return shortfall
+
+
 def tracked_programs() -> list[ProgramConfig]:
     return [p for p in load_programs() if p.university == "МЭИ" and p.parser == "mpei"]
 
@@ -375,8 +499,9 @@ class MpeiFullPool:
             if cached is not None:
                 return cached
         try:
-            catalog, kcp_groups = self._catalog_and_kcp()
-            people, programs = self._fetch_all(catalog, kcp_groups)
+            catalog, kcp_groups, catalog_html = self._catalog_and_kcp()
+            shortfalls = self._quota_shortfalls(catalog, kcp_groups, catalog_html)
+            people, programs = self._fetch_all(catalog, kcp_groups, shortfalls)
             fetched_at = datetime.now(timezone.utc).isoformat()
             self._save_cache(people, programs, fetched_at)
             return people, programs, fetched_at, False
@@ -387,7 +512,44 @@ class MpeiFullPool:
             raise
 
     @staticmethod
-    def _catalog_and_kcp() -> tuple[list[tuple[str, str]], dict[str, KcpGroup]]:
+    def _quota_shortfalls(
+        catalog: list[tuple[str, str]], kcp_groups: dict[str, KcpGroup], html: str
+    ) -> dict[str, int]:
+        """Название группы каталога → сколько квотных мест осталось незанятыми.
+
+        Считаем сами из независимых данных (официальный КЦП по видам квот минус
+        зачисленные по квотным спискам), а не читаем «вакантные места» волны:
+        те равны числу людей, которых сайт уже отметил проходящими, и опираться
+        на них — значит подглядывать в ответ.
+
+        Недоступность квотных списков не должна ронять сборку: без них останется
+        плановый КЦП, то есть прежнее, более пессимистичное поведение.
+        """
+        try:
+            quota_lists = quota_lists_from_page(html)
+        except Exception as exc:  # noqa: BLE001
+            print(f"ВНИМАНИЕ: не удалось разобрать квотные списки МЭИ ({exc}).", file=sys.stderr)
+            return {}
+
+        def one(item: tuple[str, str]) -> tuple[str, int] | None:
+            title, _ = item
+            group = kcp_groups.get(kcp_group_title(title))
+            if group is None:
+                return None
+            try:
+                return title, compute_quota_shortfall(group, quota_lists.get(title, {})).total
+            except Exception:  # noqa: BLE001
+                return None
+
+        result: dict[str, int] = {}
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            for item in executor.map(one, catalog):
+                if item is not None:
+                    result[item[0]] = item[1]
+        return result
+
+    @staticmethod
+    def _catalog_and_kcp() -> tuple[list[tuple[str, str]], dict[str, KcpGroup], str]:
         """Каталог конкурсных групп, суженный до основного кампуса, и их КЦП.
 
         В каталоге списков 39 групп, в московской таблице КЦП очной формы — 31,
@@ -407,7 +569,8 @@ class MpeiFullPool:
         Если таблица КЦП недоступна — каталог не сужаем и работаем на резерве:
         лучше посчитать по конфигу, чем не посчитать вовсе.
         """
-        catalog = fetch_catalog()
+        catalog_html = _get(CATALOG_URL)
+        catalog = _catalog_from_page(catalog_html)
         try:
             kcp_groups = fetch_kcp_groups()
         except Exception as exc:  # noqa: BLE001
@@ -417,14 +580,17 @@ class MpeiFullPool:
                 "подсветит это как «не live».",
                 file=sys.stderr,
             )
-            return catalog, {}
+            return catalog, {}, catalog_html
         main_campus = [item for item in catalog if kcp_group_title(item[0]) in kcp_groups]
         if not main_campus:
             raise ValueError("Ни одна конкурсная группа каталога МЭИ не нашлась в таблице КЦП")
-        return main_campus, kcp_groups
+        return main_campus, kcp_groups, catalog_html
 
     def _fetch_all(
-        self, catalog: list[tuple[str, str]], kcp_groups: dict[str, KcpGroup]
+        self,
+        catalog: list[tuple[str, str]],
+        kcp_groups: dict[str, KcpGroup],
+        shortfalls: dict[str, int] | None = None,
     ) -> tuple[list[RobotPerson], list[RobotProgram]]:
         raw_programs: list[RobotProgram] = []
         rows_by_list: dict[str, list[dict]] = {}
@@ -496,6 +662,7 @@ class MpeiFullPool:
                     seat_source=seat_source,
                     passing_cutoff=cutoff_by_list.get(list_id),
                     vacant_places=vacant_by_list.get(list_id),
+                    quota_shortfall=(shortfalls or {}).get(title),
                     site_passing_count=passing_by_list.get(list_id),
                 )
             )
