@@ -45,8 +45,12 @@ if [[ -n "$(docker ps -aq -f "name=^${name}\$")" ]]; then
   docker rm -f "$name" >/dev/null
 fi
 echo "Запускаю $name: $cmd"
+# ${NET_ARGS[@]+...} — а не голое "${NET_ARGS[@]}": в bash 3.2 (штатный на macOS)
+# раскрытие ПУСТОГО массива под `set -u` считается обращением к неустановленной
+# переменной, и деплой падал ровно там, где прокси не задан, — то есть в самом
+# обычном случае. Образ при этом успевал собраться, а контейнер не стартовал.
 # shellcheck disable=SC2086
-docker run -d --name "$name" --restart unless-stopped "${NET_ARGS[@]}" \
+docker run -d --name "$name" --restart unless-stopped ${NET_ARGS[@]+"${NET_ARGS[@]}"} \
   -e MIREA_PROXY="${MIREA_PROXY:-}" "${VOLUMES[@]}" "$IMAGE" $cmd >/dev/null
 
 echo ""
