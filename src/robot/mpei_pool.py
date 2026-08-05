@@ -4,7 +4,7 @@ import json
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin
@@ -27,7 +27,9 @@ FETCH_RETRIES = 3
 RETRYABLE_STATUS = {500, 502, 503, 504}
 
 POOL_SCOPE = "full"
-MIN_CATALOG_PROGRAMS = 30
+# Каталог сужен до основного кампуса — 27 конкурсных групп (см. _catalog_and_kcp).
+# Порог с запасом вниз: вуз может закрыть часть направлений.
+MIN_CATALOG_PROGRAMS = 20
 CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "cache" / "mpei_robot_pool.json"
 CACHE_TTL_SEC = 7200
 MAX_WORKERS = 6
@@ -106,6 +108,136 @@ BACC_URL_TEMPLATE = "https://pk.mpei.ru/inform/list{n}bacc.html"
 _VACANT_RE = re.compile(r"Количество вакантных мест:\s*(\d+)")
 _LIST_ID_NUMBER_RE = re.compile(r"entrants_list(\d+)\.html")
 
+KCP_URL = "https://pk.mpei.ru/info/speclist_simple.html"
+_OKSO_SUFFIX_RE = re.compile(r"\s*\(\d{2}\.\d{2}\.\d{2}\b.*\)\s*$")
+
+
+@dataclass
+class KcpGroup:
+    """Официальный КЦП одной конкурсной группы (очная форма)."""
+
+    kcp: int  # «Всего» по всем строкам группы
+    quotas: int  # особая + отдельная + целевая
+    general: int  # места общего конкурса = КЦП − квоты
+    rows: int  # строк-профилей в группе (>1 — многопрофильная)
+
+
+def _expand_table(table) -> list[list[str]]:
+    """Таблица → прямоугольная сетка с раскрытыми rowspan/colspan.
+
+    В таблице КЦП название группы, направление и вступительные испытания
+    объединены по вертикали на все профили многопрофильной группы, а часть
+    заголовков — по горизонтали. Без раскрытия строки-продолжения начинаются с
+    аббревиатуры института («ИРЭ»), и к какой группе они относятся, по «сырым»
+    ячейкам не понять.
+    """
+    filled: dict[tuple[int, int], str] = {}
+    rows = table.find_all("tr")
+    for row_index, row in enumerate(rows):
+        col_index = 0
+        for cell in row.find_all(["td", "th"]):
+            while (row_index, col_index) in filled:
+                col_index += 1
+            text = cell.get_text(" ", strip=True)
+            rowspan = int(cell.get("rowspan") or 1)
+            colspan = int(cell.get("colspan") or 1)
+            for row_offset in range(rowspan):
+                for col_offset in range(colspan):
+                    filled[(row_index + row_offset, col_index + col_offset)] = text
+            col_index += colspan
+    if not filled:
+        return []
+    width = max(col for _, col in filled) + 1
+    return [[filled.get((row_index, col), "") for col in range(width)] for row_index in range(len(rows))]
+
+
+def _kcp_columns(grid: list[list[str]]) -> dict[str, int]:
+    """Индексы колонок мест по тексту шапки (а не по номеру — вёрстка меняется)."""
+    wanted = {
+        "kcp": "всего",
+        "special": "особая квота",
+        "separate": "отдельная квота",
+        "target": "квота приема на целевое обучение",
+    }
+    for row in grid:
+        lowered = [cell.lower() for cell in row]
+        found: dict[str, int] = {}
+        for name, marker in wanted.items():
+            for index, cell in enumerate(lowered):
+                if marker in cell:
+                    found[name] = index
+                    break
+        if len(found) == len(wanted):
+            return found
+    raise ValueError("В таблице КЦП МЭИ не найдена шапка с колонками мест и квот")
+
+
+def parse_kcp_page(html: str) -> dict[str, KcpGroup]:
+    """Официальные КЦП очной формы по названию конкурсной группы.
+
+    Места общего конкурса = «Всего» − особая − отдельная − целевая квота: робот
+    моделирует именно общий конкурс по ЕГЭ, без квотных мест.
+
+    Строки одной многопрофильной группы складываются в ОДНО число. У группы один
+    конкурсный список, один проходной балл и одна страница волны («Информатика и
+    вычислительная техника ИВТИ, ИРЭ бюджет (Очная)») — разброс по институтам вуз
+    делает уже внутри, после зачисления, и на конкурс он не влияет.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    table = soup.find("table", class_="kcp-table")
+    if table is None:
+        raise ValueError("Не найдена таблица kcp-table на странице КЦП МЭИ")
+
+    grid = _expand_table(table)
+    columns = _kcp_columns(grid)
+
+    groups: dict[str, KcpGroup] = {}
+    in_daytime = False
+    for row in grid:
+        title = row[0].strip()
+        if title == "Очная форма обучения":
+            in_daytime = True
+            continue
+        if title.startswith("Очно-заочная") or title.startswith("Заочная"):
+            break
+        if not in_daytime or not title:
+            continue
+        try:
+            kcp = int(row[columns["kcp"]])
+            quotas = sum(int(row[columns[name]]) for name in ("special", "separate", "target"))
+        except (ValueError, IndexError):
+            continue
+        title = " ".join(title.replace("\xa0", " ").split())
+        group = groups.get(title)
+        if group is None:
+            groups[title] = KcpGroup(kcp=kcp, quotas=quotas, general=kcp - quotas, rows=1)
+            continue
+        group.kcp += kcp
+        group.quotas += quotas
+        group.general += kcp - quotas
+        group.rows += 1
+    if not groups:
+        raise ValueError("Не удалось извлечь ни одной конкурсной группы из таблицы КЦП МЭИ")
+    return groups
+
+
+def fetch_kcp_groups() -> dict[str, KcpGroup]:
+    return parse_kcp_page(_get(KCP_URL))
+
+
+def kcp_group_title(catalog_title: str) -> str:
+    """«Прикладная информатика (09.03.03 Прикладная информатика)» → «Прикладная информатика».
+
+    В каталоге конкурсных списков к названию группы приписан код направления в
+    скобках, в таблице КЦП — нет. Срезается только хвост, начинающийся с кода
+    ОКСО: скобки внутри самого названия трогать нельзя.
+
+    Пробелы нормализуются: в таблице КЦП встречаются неразрывные пробелы, и без
+    этого «Мехатроника, робототехника, машиностроение и автоматизация» не
+    находилась в КЦП, хотя она там есть.
+    """
+    return " ".join(_OKSO_SUFFIX_RE.sub("", catalog_title).replace("\xa0", " ").split())
+
 
 def _bacc_url_for_list_id(list_id: str) -> str | None:
     match = _LIST_ID_NUMBER_RE.fullmatch(list_id)
@@ -123,16 +255,28 @@ def _expand_row_cells(row) -> list[str]:
     return cells
 
 
-def _rows_and_vacant_from_bacc(html: str) -> tuple[list[dict], int | None]:
-    """Абитуриенты и «Количество вакантных мест» со страницы конкретной волны зачисления.
+def _rows_and_meta_from_bacc(html: str) -> tuple[list[dict], int | None, int | None]:
+    """Абитуриенты, «Количество вакантных мест» и проходной балл сайта со
+    страницы волны зачисления (/inform/list<N>bacc.html, индекс — /inform/list).
 
-    У /inform/list<N>bacc.html есть то, чего нет на обычном /info/entrants_list<N>.html:
-    колонка «Примечание» реально заполнена пометкой «Зачисляется в другой КГ» —
-    сайт уже определил, что конкретно этот человек, несмотря на присутствие в
-    этом списке, займёт место в ДРУГОЙ конкурсной группе, а не здесь. Без
-    исключения таких строк наш каскад считает их «занявшими» место в этом
-    направлении, которое реально свободно (проверено живьём: pk.mpei.ru
-    показывает меньше занятых мест по итогу, чем получалось у нас).
+    Три вещи со страницы и что с ними делает робот:
+
+    * **строки списка** — вход каскада;
+    * **колонка «Высший проходной»** — ОФИЦИАЛЬНЫЙ ВЕРДИКТ вуза: галочка у тех,
+      кто реально проходит сюда по высшему приоритету с учётом согласия. Каскад
+      её не читает — она уходит в `passing_cutoff` как независимый оракул, с
+      которым потом сверяется наш прогноз;
+    * **«Количество вакантных мест»** — сколько основных мест ещё свободно
+      прямо сейчас. Тоже вердикт сайта, и как источник мест не используется:
+      каскад считает от официального КЦП (см. `fetch_kcp_groups`), иначе сверка
+      выродилась бы в круг — на list14 вакантных мест ровно 170 и ровно 170
+      человек помечены «Высший проходной», то есть число мест и есть ответ.
+      Возвращается для сверки в `seat_oracle`.
+
+    Из конкурса исключаются только те, кто выбыл ФАКТИЧЕСКИ («Забрал документы»,
+    «Исключен из списка»). Пометка «Зачисляется в другой КГ» — это уже решение
+    сайта о распределении, и робот его не берёт: кто куда попадёт по своим
+    приоритетам, он обязан вывести сам, иначе сверять его не с чем.
     """
     vacant_match = _VACANT_RE.search(html)
     vacant = int(vacant_match.group(1)) if vacant_match else None
@@ -152,39 +296,59 @@ def _rows_and_vacant_from_bacc(html: str) -> tuple[list[dict], int | None]:
     consent_idx = header_index(headers, "согласие")
     priority_idx = header_index(headers, "приоритет")
     note_idx = header_index(headers, "примечание")
+    # Оракул сайта. Берётся «Высший проходной», а не «Основной высший»: первая
+    # учитывает согласие (как и робот с require_consent), вторая — чистый ранг.
+    top_idx = header_index(headers, "высший проходной")
     if None in (code_idx, score_idx, consent_idx, priority_idx):
         raise ValueError("Не удалось определить колонки таблицы МЭИ")
 
     result: list[dict] = []
+    passing_scores: list[int] = []
+    has_top_column = top_idx is not None
     for row in rows[2:]:
         cells = _expand_row_cells(row)
         if len(cells) <= max(code_idx, score_idx, consent_idx, priority_idx):
             continue
-        enrolls_elsewhere = bool(
-            note_idx is not None and note_idx < len(cells) and "другой КГ" in cells[note_idx]
-        )
+        note = cells[note_idx] if note_idx is not None and note_idx < len(cells) else ""
+        if "Забрал документы" in note or "Исключен из списка" in note:
+            continue
         score = to_int(cells[score_idx])
         if not score or score <= 0:
             continue
         code = cells[code_idx].strip()
         if not code:
             continue
+        if has_top_column and top_idx < len(cells) and normalize_yes(cells[top_idx]):
+            passing_scores.append(score)
         result.append(
             {
                 "code": code,
                 "score": score,
                 "consent": normalize_yes(cells[consent_idx]),
                 "priority": to_int(cells[priority_idx]) or 99,
-                "enrolls_elsewhere": enrolls_elsewhere,
             }
         )
-    return result, vacant
+    # None — колонки вердикта не было (сверять не с чем); 0 — колонка есть, но
+    # сюда не проходит никто (места открыты для любого балла).
+    cutoff = (min(passing_scores) if passing_scores else 0) if has_top_column else None
+    return result, vacant, cutoff
 
 
-def fetch_list_rows_and_vacant(list_id: str) -> tuple[list[dict], int | None]:
+def fetch_list_rows_and_meta(list_id: str) -> tuple[list[dict], int | None, int | None]:
     url = _bacc_url_for_list_id(list_id) or urljoin(CATALOG_URL, list_id)
     html = _get(url)
-    return _rows_and_vacant_from_bacc(html)
+    return _rows_and_meta_from_bacc(html)
+
+
+def fetch_list_vacant(list_id: str) -> int | None:
+    """«Количество вакантных мест» со страницы волны — сколько основных мест
+    ещё свободно прямо сейчас. Каскад это число не использует (см.
+    `_rows_and_meta_from_bacc`), оно нужно сверке в `seat_oracle`: разница с
+    плановым КЦП общего конкурса показывает, сколько мест вуз перенёс из
+    незаполненных квот."""
+    url = _bacc_url_for_list_id(list_id) or urljoin(CATALOG_URL, list_id)
+    match = _VACANT_RE.search(_get(url))
+    return int(match.group(1)) if match else None
 
 
 def tracked_programs() -> list[ProgramConfig]:
@@ -207,8 +371,8 @@ class MpeiFullPool:
             if cached is not None:
                 return cached
         try:
-            catalog = fetch_catalog()
-            people, programs = self._fetch_all(catalog)
+            catalog, kcp_groups = self._catalog_and_kcp()
+            people, programs = self._fetch_all(catalog, kcp_groups)
             fetched_at = datetime.now(timezone.utc).isoformat()
             self._save_cache(people, programs, fetched_at)
             return people, programs, fetched_at, False
@@ -218,19 +382,58 @@ class MpeiFullPool:
                 return stale
             raise
 
-    def _fetch_all(self, catalog: list[tuple[str, str]]) -> tuple[list[RobotPerson], list[RobotProgram]]:
+    @staticmethod
+    def _catalog_and_kcp() -> tuple[list[tuple[str, str]], dict[str, KcpGroup]]:
+        """Каталог конкурсных групп, суженный до основного кампуса, и их КЦП.
+
+        В каталоге списков 39 групп, в московской таблице КЦП очной формы — 31,
+        и 12 групп каталога в ней отсутствуют: это филиалы (Смоленский,
+        Дубненский) и их программы, у которых свои КЦП на отдельных страницах.
+        Мы их выбрасываем — интересен основной кампус, а без них у мест остаётся
+        ЕДИНСТВЕННЫЙ источник (официальный КЦП), и качать нужно 27 списков
+        вместо 39.
+
+        Цена решения измерена на живом пуле: из 1154 человек с выбором в филиале
+        956 подавали ТОЛЬКО в филиалы (в московском конкурсе их и не было), и
+        лишь у 69 филиал стоит выше московского приоритета — только они в модели
+        перетекут в московский конкурс, которого в жизни не увидят. Смещение
+        одностороннее и пессимистичное (конкурентов чуть больше, чем на самом
+        деле), то есть в безопасную сторону.
+
+        Если таблица КЦП недоступна — каталог не сужаем и работаем на резерве:
+        лучше посчитать по конфигу, чем не посчитать вовсе.
+        """
+        catalog = fetch_catalog()
+        try:
+            kcp_groups = fetch_kcp_groups()
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"ВНИМАНИЕ: не удалось получить официальные КЦП МЭИ ({exc}) — каталог не "
+                "сужен до основного кампуса, места взяты из резерва config; сверка "
+                "подсветит это как «не live».",
+                file=sys.stderr,
+            )
+            return catalog, {}
+        main_campus = [item for item in catalog if kcp_group_title(item[0]) in kcp_groups]
+        if not main_campus:
+            raise ValueError("Ни одна конкурсная группа каталога МЭИ не нашлась в таблице КЦП")
+        return main_campus, kcp_groups
+
+    def _fetch_all(
+        self, catalog: list[tuple[str, str]], kcp_groups: dict[str, KcpGroup]
+    ) -> tuple[list[RobotPerson], list[RobotProgram]]:
         raw_programs: list[RobotProgram] = []
         rows_by_list: dict[str, list[dict]] = {}
-        vacant_by_list: dict[str, int] = {}
+        cutoff_by_list: dict[str, int] = {}
         failed_lists: list[str] = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {
-                executor.submit(fetch_list_rows_and_vacant, list_id): (title, list_id) for title, list_id in catalog
+                executor.submit(fetch_list_rows_and_meta, list_id): (title, list_id) for title, list_id in catalog
             }
             for future in as_completed(futures):
                 title, list_id = futures[future]
                 try:
-                    rows, vacant = future.result()
+                    rows, _vacant, cutoff = future.result()
                 except Exception as exc:
                     failed_lists.append(list_id)
                     print(
@@ -242,8 +445,8 @@ class MpeiFullPool:
                     )
                     continue
                 rows_by_list[list_id] = rows
-                if vacant is not None:
-                    vacant_by_list[list_id] = vacant
+                if cutoff is not None:
+                    cutoff_by_list[list_id] = cutoff
 
         if catalog and len(failed_lists) / len(catalog) > MAX_FAILED_FRACTION:
             raise RuntimeError(
@@ -259,12 +462,15 @@ class MpeiFullPool:
         for title, list_id in catalog:
             tracked_program = tracked.get(list_id)
             key = str(tracked_program.id) if tracked_program else list_id
-            # Провенанс: живые «вакантные места» со страницы волны — это источник
-            # по умолчанию. Резерв (config/аппроксимация) — только если сайт не
-            # отдал число (тогда сверка мест подсветит «из резерва»).
-            places = vacant_by_list.get(list_id)
-            if places is not None:
-                seat_source = "live"
+            # Места — только официальный КЦП общего конкурса, как kcp.php у
+            # СТАНКИНа и plan у МИРЭА. НЕ «вакантные места» со страницы волны:
+            # в них уже зашит ответ сайта о том, кто зачислен (на list14 их 170
+            # и ровно 170 человек помечены «Высший проходной»), и каскад, взяв
+            # их на вход, сверять было бы не с чем. Резерв — только на случай
+            # недоступности таблицы КЦП.
+            group = kcp_groups.get(kcp_group_title(title))
+            if group is not None:
+                places, seat_source = group.general, "live"
             elif tracked_program:
                 places = tracked_program.budget_places or None
                 seat_source = "config"
@@ -278,14 +484,11 @@ class MpeiFullPool:
                     budget_places=places,
                     tracked_id=tracked_program.id if tracked_program else None,
                     seat_source=seat_source,
+                    passing_cutoff=cutoff_by_list.get(list_id),
                 )
             )
             for row in rows_by_list.get(list_id, []):
-                choice = ProgramChoice(
-                    program_key=key,
-                    priority=row["priority"],
-                    enrolls_elsewhere=row["enrolls_elsewhere"],
-                )
+                choice = ProgramChoice(program_key=key, priority=row["priority"])
                 person = people.get(row["code"])
                 if person is None:
                     people[row["code"]] = RobotPerson(

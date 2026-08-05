@@ -14,14 +14,15 @@
 
 | вуз      | что берёт робот                     | официальный оракул                     |
 |----------|-------------------------------------|----------------------------------------|
-| МЭИ      | «Количество вакантных мест» волны   | КЦП общего конкурса (speclist_simple)  |
+| МЭИ      | КЦП общего конкурса (speclist)      | тот же КЦП → сверяем config-резерв     |
 | СТАНКИН  | kcp.php (места общего конкурса)     | тот же kcp.php → сверяем ОВЕРРАЙД      |
 | МИРЭА    | plan бюджетного конкурса из API     | тот же API → сверяем config            |
 | ФА       | config/programs.json                | нет машинного источника                |
 
-У СТАНКИНа и МИРЭА робот уже берёт живое число, поэтому оракул для них сверяет
-не робота (это было бы кругом), а ЗАХАРДКОЖЕННЫЙ РЕЗЕРВ — то самое, что тухнет
-молча и всплывает в момент, когда сайт не ответил.
+Робот везде берёт живое число мест, поэтому оракул сверяет не робота (это было
+бы кругом), а ЗАХАРДКОЖЕННЫЙ РЕЗЕРВ — то самое, что тухнет молча и всплывает в
+момент, когда сайт не ответил. Сверка самого прогноза — отдельная ось, она живёт
+в `verification.py` и опирается на вердикт сайта о людях, а не о местах.
 
 Многопрофильные конкурсные группы (МЭИ: «Информатика и вычислительная техника»
 = ИВТИ + ИРЭ) считаются ОДНИМ числом — сумма мест по строкам группы. Основание:
@@ -32,18 +33,17 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 import requests
-from bs4 import BeautifulSoup
 
 from ..config_loader import load_programs
 from .models import RobotProgram
+from .mpei_pool import _extract_list_id, fetch_kcp_groups, fetch_list_vacant, kcp_group_title
+from .mpei_pool import tracked_programs as mpei_tracked_programs
 from .stankin_pool import STANKIN_KCP_OVERRIDES, fetch_stankin_seats
 from .stankin_pool import _tracked_direction_groups as stankin_tracked_groups
 
-MPEI_KCP_URL = "https://pk.mpei.ru/info/speclist_simple.html"
 MIREA_CATALOG_URL = "https://priem.mirea.ru/competitions_api"
 
 # Статусы сверки одного направления.
@@ -70,133 +70,6 @@ class SeatAudit:
     @property
     def is_problem(self) -> bool:
         return self.status in (STATUS_STALE_LOCAL, STATUS_MISMATCH)
-
-
-@dataclass
-class MpeiKcpGroup:
-    """Официальный КЦП одной конкурсной группы МЭИ (очная форма)."""
-
-    kcp: int  # «Всего» по всем строкам группы
-    quotas: int  # особая + отдельная + целевая
-    general: int  # места общего конкурса = КЦП − квоты
-    rows: int  # строк-профилей в группе (>1 — многопрофильная)
-
-
-# --------------------------------------------------------------------------- МЭИ
-
-
-def _expand_table(table) -> list[list[str]]:
-    """Таблица → прямоугольная сетка с раскрытыми rowspan/colspan.
-
-    У таблицы КЦП МЭИ название группы, направление и вступительные испытания
-    объединены по вертикали (rowspan) на все профили многопрофильной группы, а
-    часть заголовков — по горизонтали (colspan). Без раскрытия строки-продолжения
-    начинаются с аббревиатуры института («ИРЭ»), и определить, к какой группе
-    они относятся, по «сырым» ячейкам нельзя.
-    """
-    filled: dict[tuple[int, int], str] = {}
-    rows = table.find_all("tr")
-    for row_index, row in enumerate(rows):
-        col_index = 0
-        for cell in row.find_all(["td", "th"]):
-            while (row_index, col_index) in filled:
-                col_index += 1
-            text = cell.get_text(" ", strip=True)
-            rowspan = int(cell.get("rowspan") or 1)
-            colspan = int(cell.get("colspan") or 1)
-            for row_offset in range(rowspan):
-                for col_offset in range(colspan):
-                    filled[(row_index + row_offset, col_index + col_offset)] = text
-            col_index += colspan
-    if not filled:
-        return []
-    width = max(col for _, col in filled) + 1
-    return [[filled.get((row_index, col), "") for col in range(width)] for row_index in range(len(rows))]
-
-
-def _mpei_columns(grid: list[list[str]]) -> dict[str, int]:
-    """Индексы нужных колонок по тексту шапки (а не по номеру — вёрстка меняется)."""
-    wanted = {
-        "kcp": "всего",
-        "special": "особая квота",
-        "separate": "отдельная квота",
-        "target": "квота приема на целевое обучение",
-    }
-    for row in grid:
-        lowered = [cell.lower() for cell in row]
-        found: dict[str, int] = {}
-        for name, marker in wanted.items():
-            for index, cell in enumerate(lowered):
-                if marker in cell:
-                    found[name] = index
-                    break
-        if len(found) == len(wanted):
-            return found
-    raise ValueError("В таблице КЦП МЭИ не найдена шапка с колонками мест и квот")
-
-
-def parse_mpei_kcp(html: str) -> dict[str, MpeiKcpGroup]:
-    """Официальные КЦП очной формы по названию конкурсной группы.
-
-    Места общего конкурса = «Всего» − особая − отдельная − целевая квота: робот
-    моделирует именно общий конкурс по ЕГЭ, без квотных мест. Строки одной
-    многопрофильной группы суммируются в одно число (см. докстринг модуля).
-    """
-    soup = BeautifulSoup(html, "lxml")
-    table = soup.find("table", class_="kcp-table")
-    if table is None:
-        raise ValueError("Не найдена таблица kcp-table на странице КЦП МЭИ")
-
-    grid = _expand_table(table)
-    columns = _mpei_columns(grid)
-
-    groups: dict[str, MpeiKcpGroup] = {}
-    in_daytime = False
-    for row in grid:
-        title = row[0].strip()
-        if title == "Очная форма обучения":
-            in_daytime = True
-            continue
-        if title.startswith("Очно-заочная") or title.startswith("Заочная"):
-            break
-        if not in_daytime or not title:
-            continue
-        try:
-            kcp = int(row[columns["kcp"]])
-            quotas = sum(int(row[columns[name]]) for name in ("special", "separate", "target"))
-        except (ValueError, IndexError):
-            continue
-        group = groups.get(title)
-        if group is None:
-            groups[title] = MpeiKcpGroup(kcp=kcp, quotas=quotas, general=kcp - quotas, rows=1)
-            continue
-        group.kcp += kcp
-        group.quotas += quotas
-        group.general += kcp - quotas
-        group.rows += 1
-    if not groups:
-        raise ValueError("Не удалось извлечь ни одной конкурсной группы из таблицы КЦП МЭИ")
-    return groups
-
-
-def fetch_mpei_kcp() -> dict[str, MpeiKcpGroup]:
-    response = requests.get(MPEI_KCP_URL, timeout=60)
-    response.raise_for_status()
-    response.encoding = "utf-8"
-    return parse_mpei_kcp(response.text)
-
-
-_OKSO_SUFFIX_RE = re.compile(r"\s*\(\d{2}\.\d{2}\.\d{2}\b.*\)\s*$")
-
-
-def _mpei_group_title(catalog_title: str) -> str:
-    """«Прикладная информатика (09.03.03 Прикладная информатика)» → «Прикладная информатика».
-
-    В каталоге конкурсных списков к названию группы приписан код направления в
-    скобках, в таблице КЦП — нет. Срезаем только хвост, который начинается с
-    кода ОКСО: скобки внутри самого названия группы трогать нельзя.
-    """
-    return _OKSO_SUFFIX_RE.sub("", catalog_title).strip()
 
 
 # ------------------------------------------------------------------------- МИРЭА
@@ -242,25 +115,25 @@ def _tracked(programs: list[RobotProgram]) -> list[RobotProgram]:
 
 
 def audit_mpei(programs: list[RobotProgram]) -> list[SeatAudit]:
-    """МЭИ: живые «вакантные места» волны против официального КЦП.
+    """МЭИ: число робота и config-резерв против официального КЦП общего конкурса.
 
-    Две разные проверки, потому что это два разных числа:
-
-    * **робот** берёт вакантные места текущей волны. Они НЕ обязаны совпадать с
-      КЦП общего конкурса: вуз уже перенёс в общий конкурс незаполненные квоты
-      (вверх) и вычел зачисленных предыдущими приказами (вниз). Поэтому здесь
-      проверяются не равенство, а границы `0 < вакантные ≤ КЦП` — выход за них
-      означает, что со страницы читается не то число.
-    * **резерв в config** (его берут, когда сайт не отдал вакантные места)
-      сверяется с КЦП общего конкурса. Резерв обязан быть именно этим числом:
-      оно официальное, выводится по формуле и стабильно между волнами, в отличие
-      от снимка вакантных мест, который протухает к следующему приказу.
+    Робот берёт места из той же таблицы КЦП, поэтому проверяется равенство — как
+    у СТАНКИНа с kcp.php. Отдельно подтягиваются «вакантные места» со страницы
+    волны: они законно отличаются от планового КЦП (вуз переносит в общий
+    конкурс незаполненные квоты и вычитает уже зачисленных), и служат
+    контекстом, а не критерием. Источником мест они быть не могут: на list14
+    вакантных мест ровно 170 и ровно 170 человек помечены сайтом «Высший
+    проходной» — то есть это уже ответ, а не вход.
     """
-    kcp = fetch_mpei_kcp()
+    kcp = fetch_kcp_groups()
     config = _config_places("МЭИ")
+    tracked_lists = {
+        str(program.id): _extract_list_id(program.list_url)
+        for program in mpei_tracked_programs()
+    }
     audits: list[SeatAudit] = []
     for program in _tracked(programs):
-        group = kcp.get(_mpei_group_title(program.title))
+        group = kcp.get(kcp_group_title(program.title))
         local = config.get(program.tracked_id)
         if group is None:
             audits.append(
@@ -279,21 +152,25 @@ def audit_mpei(programs: list[RobotProgram]) -> list[SeatAudit]:
 
         multi = f", многопрофильная: {group.rows} строк(и) сложены" if group.rows > 1 else ""
         base = f"КЦП {group.kcp} − квоты {group.quotas} = {group.general} мест общего конкурса{multi}"
+        list_id = tracked_lists.get(str(program.tracked_id))
+        vacant = fetch_list_vacant(list_id) if list_id else None
+        if vacant is not None:
+            base += f"; сайт показывает {vacant} вакантных на волну"
 
         if program.budget_places is None:
             status, note = STATUS_MISMATCH, f"робот не знает числа мест; {base}"
-        elif program.seat_source != "live":
-            status = STATUS_STALE_LOCAL if program.budget_places != group.general else STATUS_OK
-            note = f"сайт не отдал вакантные места, взят резерв «{program.seat_source}»; {base}"
-        elif not 0 < program.budget_places <= group.kcp:
+        elif program.budget_places != group.general:
             status = STATUS_MISMATCH
-            note = f"вакантных мест {program.budget_places} вне границ 1..{group.kcp}; {base}"
+            note = (
+                f"робот взял {program.budget_places} (источник «{program.seat_source}»), "
+                f"а официальный КЦП даёт {group.general}; {base}"
+            )
         elif local is not None and local != group.general:
             status = STATUS_STALE_LOCAL
             note = f"резерв config={local} не равен официальным местам общего конкурса; {base}"
         else:
             status = STATUS_OK
-            note = f"вакантных мест волны {program.budget_places}; {base}"
+            note = base
         audits.append(
             SeatAudit(
                 university="МЭИ",
