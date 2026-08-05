@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -115,11 +116,27 @@ def quota_lists_from_page(html: str) -> dict[str, dict[str, list[str]]]:
     return result
 
 
+_thread_local = threading.local()
+
+
+def _session() -> requests.Session:
+    """Thread-local Session: воркер переиспользует своё соединение вместо нового
+    TCP+TLS-рукопожатия на каждую страницу. Сборка МЭИ — это 27 списков общего
+    конкурса плюс ~200 квотных, то есть больше двухсот запросов к одному хосту;
+    без keep-alive рукопожатие платится каждый раз. Своя сессия на поток →
+    потокобезопасно (как в fa_pool)."""
+    session = getattr(_thread_local, "mpei_session", None)
+    if session is None:
+        session = requests.Session()
+        _thread_local.mpei_session = session
+    return session
+
+
 def _get(url: str) -> str:
     last_error: Exception | None = None
     for attempt in range(FETCH_RETRIES):
         try:
-            response = requests.get(url, timeout=60)
+            response = _session().get(url, timeout=60)
             response.raise_for_status()
             response.encoding = "utf-8"
             return response.text
