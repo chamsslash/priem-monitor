@@ -118,10 +118,26 @@ class DimaPrioritySnapshot:
     budget_places: int | None
     remaining_at_turn: int | None
     tracked_id: int | None = None
+    # Ответ ОРАКУЛА по этому направлению: проходной балл среди согласных прямо с
+    # сайта вуза. Робот его не использует в расчёте — он показывается рядом с
+    # выводом робота, чтобы расхождение было видно сразу, а не пряталось.
+    # 0 — сюда проходит любой (места открыты); None — вуз не публикует порог.
+    site_cutoff: int | None = None
 
     @property
     def can_enter(self) -> bool:
         return self.remaining_at_turn is not None and self.remaining_at_turn > 0
+
+    def site_lets_in(self, score: int) -> bool | None:
+        """Пускает ли сюда сайт по своему порогу. None — порога нет."""
+        if self.site_cutoff is None:
+            return None
+        return score >= self.site_cutoff
+
+    def agrees_with_site(self, score: int) -> bool | None:
+        """Сходятся ли робот и сайт по этому направлению. None — сверять не с чем."""
+        site = self.site_lets_in(score)
+        return None if site is None else site == self.can_enter
 
 
 @dataclass

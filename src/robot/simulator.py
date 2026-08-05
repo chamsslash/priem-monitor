@@ -608,6 +608,13 @@ def run_robot_simulation(
     if result.dima_placed_program_key in display_titles:
         result.dima_placed_title = display_titles[result.dima_placed_program_key]
 
+    # Ответ оракула рядом с ответом робота: проходной балл сайта по каждому
+    # приоритету. Считается ПОСЛЕ каскада и в него не входит — иначе робот стал
+    # бы копией сайта, и сверять было бы нечего.
+    site_cutoffs = {program.key: program.passing_cutoff for program in programs}
+    for snapshot in result.dima_remaining_at_turn:
+        snapshot.site_cutoff = site_cutoffs.get(snapshot.program_key)
+
     result.verification = build_verification_report(university, result, programs, sim_dima=dima)
     result.optimistic = _build_optimistic(
         university,

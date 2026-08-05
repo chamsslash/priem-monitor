@@ -5,7 +5,12 @@ from zoneinfo import ZoneInfo
 
 from ..config_loader import load_programs
 from .direction_keys import okso_code_for_program
-from .models import CompetitorBeforeDima, RobotSimulationResult, VerificationReport
+from .models import (
+    CompetitorBeforeDima,
+    DimaPrioritySnapshot,
+    RobotSimulationResult,
+    VerificationReport,
+)
 
 
 def _okso_by_tracked_id() -> dict[int, str]:
@@ -117,6 +122,22 @@ def _format_verification(report: VerificationReport | None) -> list[str]:
     return lines
 
 
+def _format_oracle(item: DimaPrioritySnapshot, score: int) -> str:
+    """Колонка «сайт»: что говорит официальный проходной балл по этому направлению.
+
+    Показывается ВСЕГДА, а не только при расхождении. Робот — модель, и он может
+    ошибаться; вердикт вуза о том, кто проходит среди согласных, взят прямо с его
+    страницы и в расчёт робота не входит. Видеть их рядом важнее, чем видеть один
+    красивый ответ: если они разошлись, решает сайт, а не мы.
+    """
+    if item.site_cutoff is None:
+        return ""
+    threshold = "любой балл" if item.site_cutoff == 0 else f"проходной {item.site_cutoff}"
+    mark = "✅" if item.site_lets_in(score) else "❌"
+    flag = " ⚠️расхождение" if item.agrees_with_site(score) is False else ""
+    return f" · сайт: {threshold} {mark}{flag}"
+
+
 def _format_optimistic(result: RobotSimulationResult) -> list[str]:
     """Второй прогноз — на местах, реально выставленных на волну.
 
@@ -186,19 +207,28 @@ def format_robot_result(result: RobotSimulationResult) -> str:
         )
         lines.append(f"Учитываются приоритеты ({len(result.dima_remaining_at_turn)}):")
         okso_by_id = _okso_by_tracked_id()
+        disagreements = 0
         for item in result.dima_remaining_at_turn:
             okso = okso_by_id.get(item.tracked_id) if item.tracked_id is not None else None
             prefix = f"{okso} " if okso else ""
             suffix = f" (код {item.tracked_id})" if item.tracked_id is not None else ""
+            oracle = _format_oracle(item, result.dima_score)
+            if item.agrees_with_site(result.dima_score) is False:
+                disagreements += 1
             if item.budget_places is None or item.remaining_at_turn is None:
-                lines.append(f"  {item.priority}. {prefix}{item.title}{suffix}: места: нет данных")
+                lines.append(f"  {item.priority}. {prefix}{item.title}{suffix}: места: нет данных{oracle}")
                 continue
             status = "✅" if item.can_enter else "❌"
             taken = item.budget_places - item.remaining_at_turn
             lines.append(
                 f"  {item.priority}. {prefix}{item.title}{suffix}: "
                 f"осталось {item.remaining_at_turn}/{item.budget_places} "
-                f"(занято {taken}) {status}"
+                f"(занято {taken}) {status}{oracle}"
+            )
+        if disagreements:
+            lines.append(
+                f"  ⚠️ Робот и сайт разошлись на {disagreements} направлении(ях) — "
+                "смотрите колонку «сайт», она с официальной страницы вуза"
             )
 
     lines.append("")
