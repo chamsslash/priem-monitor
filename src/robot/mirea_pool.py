@@ -32,7 +32,10 @@ _MIREA_PROXY = os.environ.get("MIREA_PROXY", "").strip()
 _PROXIES = {"http": _MIREA_PROXY, "https": _MIREA_PROXY} if _MIREA_PROXY else None
 
 POOL_SCOPE = "full"
-MIN_CATALOG_PROGRAMS = 150
+# Порог «кэш неполный, пересобрать». Считаем только бюджетные конкурсы, их 84
+# (до отсечения платных было 181, и порог стоял 150 — после фикса он отбраковывал
+# заведомо годный кэш). Берём с запасом вниз: вуз может закрыть часть направлений.
+MIN_CATALOG_PROGRAMS = 60
 CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "cache" / "mirea_robot_pool.json"
 CACHE_TTL_SEC = 7200
 CHUNK_SIZE = 3
@@ -45,12 +48,26 @@ def _program_title(program: ProgramConfig) -> str:
     return program.program.replace("\n", " / ").strip() or program.competition_group.strip()
 
 
+# У МИРЭА бюджетный и ПЛАТНЫЙ конкурсы подписаны ОДИНАКОВО — compType «общий
+# конкурс», поэтому отличать их можно только по compTypeId: «4» — бюджет,
+# «6» — платное (ещё «5» — БВИ). Раньше фильтр смотрел на текст и тянул оба, из-за
+# чего в модель попадали 97 платных «направлений» и 7723 фантомных места против
+# 2304 настоящих. Каскад рассаживал людей на платные места, они исчезали из борьбы
+# за бюджет, и робот видел свободные места там, где их нет: обещал проходной балл
+# 259 там, где сайт показывал 263. Признак сверен со страницей приёмной комиссии
+# на 26 программах — бюджетные и платные числа совпали все.
+BUDGET_COMP_TYPE_ID = "4"
+
+
 @dataclass
 class MireaCompetition:
     comp_id: str
     title: str
     subject: str
     plan: int
+    # «Проходной ВП» с сайта: минимальный балл среди проходящих. Живой оракул для
+    # сверки прогноза — то же, что passing_cutoff у СТАНКИНа.
+    min_score: int | None = None
 
 
 class MireaFullPool:
@@ -135,11 +152,15 @@ class MireaFullPool:
             subject = (program.get("programSubjectTitle") or "").strip()
             display = f"{title} ({subject})" if subject and subject not in title else title
             for competition in program.get("competitions", []):
-                if competition.get("compType") != "общий конкурс":
+                # Только бюджетный общий конкурс. Платный (compTypeId «6») в модель
+                # не берём совсем: робот считает поступление на бюджет, и платные
+                # места не должны уводить конкурентов из бюджетной очереди.
+                if str(competition.get("compTypeId")) != BUDGET_COMP_TYPE_ID:
                     continue
                 plan = int(competition.get("plan") or 0)
                 if plan <= 0:
                     continue
+                min_score = competition.get("minScore")
                 for comp_id in competition.get("compIds", []):
                     catalog.append(
                         MireaCompetition(
@@ -147,6 +168,7 @@ class MireaFullPool:
                             title=display,
                             subject=subject,
                             plan=plan,
+                            min_score=int(min_score) if min_score else None,
                         )
                     )
         if not catalog:
@@ -187,6 +209,7 @@ class MireaFullPool:
                     title=item.title,
                     subject=item.subject,
                     plan=plan,
+                    min_score=item.min_score,
                 )
             )
         return updated
@@ -280,6 +303,11 @@ class MireaFullPool:
                     title=item.title,
                     budget_places=item.plan,
                     tracked_id=tracked.get(item.comp_id),
+                    # Места приходят живьём из competitions_api (поле plan), а не из
+                    # конфига-резерва: раньше штамп не ставился, и сверка ошибочно
+                    # рапортовала «места из резерва» при живых и верных числах.
+                    seat_source="live",
+                    passing_cutoff=item.min_score,
                 )
             )
         return sorted(programs, key=lambda program: program.title)
