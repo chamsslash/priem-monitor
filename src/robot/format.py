@@ -40,11 +40,18 @@ def _data_header(result: RobotSimulationResult) -> str:
     if result.from_cache:
         # Протухший кэш всё равно показываем (иначе бот молчал бы минутами),
         # но честно говорим, что цифры старые и свежие уже едут.
-        from .universities import SUPPORTED_UNIVERSITIES, is_pool_stale
+        from .universities import SUPPORTED_UNIVERSITIES, expected_refresh_hint, is_pool_stale
 
         parser_name = SUPPORTED_UNIVERSITIES.get(result.university)
         if parser_name is not None and is_pool_stale(parser_name, result.fetched_at):
-            return f"{title} (кэш от {fetched} · обновляю в фоне)"
+            # Срок конкретный, а не «подождите»: у вузов он отличается в полтора
+            # порядка (МИРЭА 3 секунды, СТАНКИН почти 8 минут), и без цифры
+            # человек не понимает, обновлять через минуту или через десять.
+            return (
+                f"{title}\n"
+                f"⏳ Списки сейчас подтягиваются с сайта вуза — это {expected_refresh_hint(parser_name)}. "
+                f"Пока показываю данные от {fetched}; повторите команду позже, чтобы увидеть свежие."
+            )
         return f"{title} (кэш от {fetched})"
     return f"{title} (данные от {fetched})"
 

@@ -65,6 +65,39 @@ if set(_CACHE_READERS) != set(_POOL_FETCHERS) or set(_CACHE_TTLS) != set(_POOL_F
     raise RuntimeError("_CACHE_READERS/_CACHE_TTLS должны покрывать те же парсеры, что и _POOL_FETCHERS")
 
 
+# Сколько примерно занимает полная пересборка пула, по замерам 2026-08-06.
+# Нужно, чтобы во время обновления говорить пользователю не безликое «подождите»,
+# а конкретный срок: у вузов он отличается в полтора порядка. Числа привязаны к
+# текущим настройкам параллелизма (см. MAX_WORKERS в парсерах) — если менять их,
+# пересверить и здесь.
+_EXPECTED_REFRESH_SEC = {
+    "mirea": 3,  # машинный JSON API, пачками по 3 конкурса
+    "mpei": 35,  # 27 списков общего конкурса + ~200 квотных, 6 потоков
+    "fa": 225,  # ~500 страниц по 100 строк, 10 потоков
+    "stankin": 465,  # ~940 страниц по 50 строк, 3 потока (сайт троттлит)
+}
+
+
+def expected_refresh_seconds(parser_name: str) -> int | None:
+    return _EXPECTED_REFRESH_SEC.get(parser_name)
+
+
+def expected_refresh_hint(parser_name: str | None = None, *, seconds: int | None = None) -> str:
+    """Человеческая оценка времени пересборки: «около 8 минут».
+
+    Принимает либо парсер, либо готовое число секунд — второе нужно, когда срок
+    считается по нескольким вузам сразу (ждём самый медленный).
+    """
+    if seconds is None and parser_name is not None:
+        seconds = _EXPECTED_REFRESH_SEC.get(parser_name)
+    if seconds is None:
+        return "несколько минут"
+    if seconds < 60:
+        return "меньше минуты"
+    minutes = round(seconds / 60)
+    return "около минуты" if minutes == 1 else f"около {minutes} минут"
+
+
 def read_cached_pool(parser_name: str) -> CachedPool | None:
     """Кэш вуза любого возраста, без единого сетевого запроса.
 

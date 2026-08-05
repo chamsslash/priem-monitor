@@ -124,8 +124,30 @@ def _format_multi_status(code: str, results: list, *, stale: bool = False) -> st
         else:
             lines.append("⏳ Данные ещё собираются после перезапуска — вернитесь через пару минут.")
     if stale and ready_universities:
+        from src.robot.universities import (
+            SUPPORTED_UNIVERSITIES,
+            expected_refresh_hint,
+            expected_refresh_seconds,
+            is_pool_stale,
+        )
+
+        # Срок — по САМОМУ МЕДЛЕННОМУ из протухших вузов: пользователь ждёт,
+        # пока обновится всё, а разброс тут полтора порядка (МИРЭА 3 секунды,
+        # СТАНКИН почти 8 минут). Вузы обновляются параллельно, поэтому именно
+        # максимум, а не сумма.
+        stale_seconds = [
+            value
+            for university, result in results
+            if (parser := SUPPORTED_UNIVERSITIES.get(university)) is not None
+            and is_pool_stale(parser, result.fetched_at)
+            and (value := expected_refresh_seconds(parser)) is not None
+        ]
         lines.append("")
-        lines.append("⏳ Часть данных устарела — обновляю в фоне, повторите через пару минут.")
+        lines.append(
+            "⏳ Списки сейчас подтягиваются с сайтов вузов — это "
+            f"{expected_refresh_hint(seconds=max(stale_seconds)) if stale_seconds else 'несколько минут'}. "
+            "Показаны прошлые данные; повторите команду позже."
+        )
     lines.append("")
     lines.append("Подробности по одному вузу: /робот <вуз>")
     return "\n".join(lines)
