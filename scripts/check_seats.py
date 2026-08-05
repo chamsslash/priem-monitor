@@ -95,6 +95,39 @@ def _print_paid(university: str, programs: list[RobotProgram]) -> bool:
     return ok
 
 
+def _print_transfers(programs: list[RobotProgram]) -> None:
+    """Перенос незаполненных квот в общий конкурс: план против волны.
+
+    Плановое число мест общего конкурса (КЦП минус квоты) и число мест, реально
+    выставленных на волну, законно расходятся в обе стороны: вверх — вуз вернул
+    незаполненные квотные места всем, вниз — часть мест уже занята прошлыми
+    приказами. Это не ошибка и не повод менять вход каскада, а контекст: он
+    показывает, насколько основной прогноз пессимистичен.
+    """
+    rows = [program for program in programs if program.vacant_places is not None]
+    if not rows:
+        return
+    print(f"  {'напр. (места волны против плана)':<52} {'план':>5} {'волна':>6} {'Δ':>5}")
+    for program in sorted(rows, key=lambda item: -(item.vacant_places - (item.budget_places or 0))):
+        planned = program.budget_places
+        delta = f"{program.vacant_places - planned:+d}" if planned is not None else "—"
+        print(
+            f"  {program.title[:51]:<52} {str(planned):>5} "
+            f"{program.vacant_places:>6} {delta:>5}"
+        )
+    gained = sum(
+        program.vacant_places - program.budget_places
+        for program in rows
+        if program.budget_places is not None and program.vacant_places > program.budget_places
+    )
+    lost = sum(
+        program.budget_places - program.vacant_places
+        for program in rows
+        if program.budget_places is not None and program.vacant_places < program.budget_places
+    )
+    print(f"  итого: +{gained} мест из незаполненных квот, −{lost} уже занято прошлыми приказами")
+
+
 def _print_cutoffs(university: str, programs: list[RobotProgram]) -> None:
     """Проходной балл робота против проходного балла сайта по каждому направлению.
 
@@ -196,6 +229,7 @@ def main() -> int:
             _print_seats(audits)
             problems += sum(1 for audit in audits if audit.is_problem)
 
+        _print_transfers(programs)
         _print_cutoffs(university, programs)
         if not _print_paid(university, programs):
             problems += 1

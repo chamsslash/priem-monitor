@@ -425,6 +425,7 @@ class MpeiFullPool:
         raw_programs: list[RobotProgram] = []
         rows_by_list: dict[str, list[dict]] = {}
         cutoff_by_list: dict[str, int] = {}
+        vacant_by_list: dict[str, int] = {}
         failed_lists: list[str] = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {
@@ -433,7 +434,7 @@ class MpeiFullPool:
             for future in as_completed(futures):
                 title, list_id = futures[future]
                 try:
-                    rows, _vacant, cutoff = future.result()
+                    rows, vacant, cutoff = future.result()
                 except Exception as exc:
                     failed_lists.append(list_id)
                     print(
@@ -447,6 +448,8 @@ class MpeiFullPool:
                 rows_by_list[list_id] = rows
                 if cutoff is not None:
                     cutoff_by_list[list_id] = cutoff
+                if vacant is not None:
+                    vacant_by_list[list_id] = vacant
 
         if catalog and len(failed_lists) / len(catalog) > MAX_FAILED_FRACTION:
             raise RuntimeError(
@@ -485,6 +488,7 @@ class MpeiFullPool:
                     tracked_id=tracked_program.id if tracked_program else None,
                     seat_source=seat_source,
                     passing_cutoff=cutoff_by_list.get(list_id),
+                    vacant_places=vacant_by_list.get(list_id),
                 )
             )
             for row in rows_by_list.get(list_id, []):

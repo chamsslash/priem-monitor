@@ -102,8 +102,52 @@ def _format_verification(report: VerificationReport | None) -> list[str]:
             robot = placement.robot_title or "не проходит"
             site = placement.site_title or "не проходит"
             lines.append(f"⚠️ Прогноз расходится: робот → {robot}, сайт-порог → {site}")
+        elif placement.status == "boundary":
+            # Балл в точности равен проходному: при равном балле проходит не
+            # каждый (дальше решают ИД и преимущественное право), поэтому спорить
+            # тут не о чем — но и молчать нельзя, это граница удачи.
+            robot = placement.robot_title or "не проходит"
+            site = placement.site_title or "не проходит"
+            lines.append(
+                f"⚖️ Прогноз на границе: робот → {robot}, сайт-порог → {site}; "
+                "ваш балл РАВЕН проходному, при равном балле проходит не каждый"
+            )
         else:  # unavailable
             lines.append("ℹ️ Прогноз: нет проходных баллов на сайте — не сверить")
+    return lines
+
+
+def _format_optimistic(result: RobotSimulationResult) -> list[str]:
+    """Второй прогноз — на местах, реально выставленных на волну.
+
+    Основной прогноз считает по плановому КЦП: он не зависит от вердикта сайта
+    о людях, и потому проверяем. Здесь показываем, что меняется, когда вуз
+    возвращает незаполненные квоты в общий конкурс. Это не уточнение основного
+    прогноза, а именно второй сценарий: число вакантных мест на волне равно
+    числу тех, кого сайт САМ отметил проходящими, поэтому его совпадение с
+    сайтом ничего не доказывает.
+    """
+    outlook = result.optimistic
+    if outlook is None:
+        return []
+
+    lines = ["", "— Оптимистичный сценарий (незаполненные квоты → общий конкурс) —"]
+    for item in outlook.transfers:
+        lines.append(f"  {item.title}: план {item.planned} → на волне {item.actual} ({item.delta:+d})")
+    if not outlook.transfers:
+        lines.append("  На ваших приоритетах места волны совпали с плановыми")
+
+    if outlook.placed_program_key is None:
+        lines.append("→ И так не проходите ни по одному приоритету")
+    else:
+        lines.append(
+            f"→ Зачислится: {outlook.placed_title or ''} "
+            f"({outlook.priority_used}-й приоритет)"
+        )
+    if outlook.placed_program_key == result.dima_placed_program_key:
+        lines.append("  Итог тот же, что и в основном прогнозе")
+    else:
+        lines.append("  ⚠️ Итог отличается от основного прогноза")
     return lines
 
 
@@ -168,6 +212,7 @@ def format_robot_result(result: RobotSimulationResult) -> str:
         lines.append(f"→ Зачислится: {result.dima_placed_title or ''}")
         lines.append(f"  {result.dima_priority_used}-й приоритет · этап: {via}")
 
+    lines.extend(_format_optimistic(result))
     lines.extend(_format_verification(result.verification))
 
     if result.dima_competitors_by_program:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from ..config_loader import load_programs
 from ..models import ProgramConfig
 from .config import RobotSettings, load_robot_config
@@ -8,9 +10,11 @@ from .priorities import program_display_name
 from .models import (
     CompetitorBeforeDima,
     DimaPrioritySnapshot,
+    OptimisticOutlook,
     P1CompetitorHigherPriority,
     ProgramChoice,
     ProgramState,
+    QuotaTransfer,
     RobotPerson,
     RobotProgram,
     RobotSimulationResult,
@@ -394,6 +398,75 @@ def _simulate_two_phase(
     )
 
 
+def _build_optimistic(
+    university: str,
+    programs: list[RobotProgram],
+    people: list[RobotPerson],
+    dima: RobotPerson,
+    *,
+    dima_in_pool: bool,
+    require_consent: bool,
+    display_titles: dict[str, str],
+) -> OptimisticOutlook | None:
+    """Прогон каскада на местах, реально выставленных на волну.
+
+    Разница с основным прогоном ровно одна: места берутся из
+    `vacant_places` (сколько мест вуз открыл на эту волну) вместо планового
+    КЦП общего конкурса. Незаполненные квоты вуз возвращает в общий конкурс, и
+    на волне мест обычно больше — но не всегда: часть мест бывает уже занята
+    прошлыми приказами, и тогда их меньше планового (на «Фундаментальной
+    информатике» МЭИ 6 против 13 по плану).
+
+    Возвращает None, когда сравнивать нечего: вуз не публикует вакантные места
+    (все, кроме МЭИ) либо они везде совпали с плановыми.
+    """
+    dima_keys = {choice.program_key for choice in dima.choices}
+    transfers = [
+        QuotaTransfer(
+            program_key=program.key,
+            title=display_titles.get(program.key, program.title),
+            planned=program.budget_places,
+            actual=program.vacant_places,
+        )
+        for program in programs
+        if program.key in dima_keys
+        and program.vacant_places is not None
+        and program.budget_places is not None
+        and program.vacant_places != program.budget_places
+    ]
+    if not any(
+        program.vacant_places is not None and program.vacant_places != program.budget_places
+        for program in programs
+    ):
+        return None
+
+    # Места волны подставляются по ВСЕМ направлениям, а не только по приоритетам
+    # Димы: конкуренты распределяются по всему вузу, и лишнее место на чужом
+    # направлении уводит оттуда человека, который иначе давил бы на приоритеты Димы.
+    optimistic_programs = [
+        replace(program, budget_places=program.vacant_places)
+        if program.vacant_places is not None
+        else program
+        for program in programs
+    ]
+    run = _simulate_two_phase(
+        university,
+        optimistic_programs,
+        people,
+        dima,
+        dima_in_pool=dima_in_pool,
+        require_consent=require_consent,
+        from_cache=False,
+    )
+    placed_key = run.dima_placed_program_key
+    return OptimisticOutlook(
+        transfers=sorted(transfers, key=lambda item: -item.delta),
+        placed_program_key=placed_key,
+        placed_title=display_titles.get(placed_key, run.dima_placed_title) if placed_key else None,
+        priority_used=run.dima_priority_used,
+    )
+
+
 # Текст ошибки при stale_ok=True и пустом кэше — данные ещё ни разу не
 # собирались (например, первые минуты после рестарта бота). Обработчики и
 # форматтеры сравнивают с этой же строкой, чтобы отличить «данных пока нет»
@@ -536,4 +609,13 @@ def run_robot_simulation(
         result.dima_placed_title = display_titles[result.dima_placed_program_key]
 
     result.verification = build_verification_report(university, result, programs, sim_dima=dima)
+    result.optimistic = _build_optimistic(
+        university,
+        programs,
+        people,
+        dima,
+        dima_in_pool=dima_in_pool,
+        require_consent=settings.require_consent,
+        display_titles=display_titles,
+    )
     return result
