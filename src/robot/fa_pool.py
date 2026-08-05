@@ -493,7 +493,31 @@ class FaFullPool:
                     site_passing_count=verdict[title][1] if title in verdict else None,
                 )
             )
+        _warn_unmatched(programs)
         return programs
+
+
+def _warn_unmatched(programs: list[RobotProgram]) -> None:
+    """Программы, которым не нашлось места в приказе, — вслух, а не молча.
+
+    Две причины, и обе стоит видеть. Первая безобидная: программы, которых в
+    московской очной секции приказа нет вовсе (они есть только в филиалах —
+    Журналистика, Медиакоммуникации, Анализ данных и т.п.); после фильтра по
+    кампусу у них не остаётся ни одного абитуриента, и заглушка ни на что не
+    влияет. Вторая — дефект разбора: строку на разрыве страниц PDF (так теряются
+    «Корпоративные финансы», 56 мест) pdfplumber не отдаёт в составе таблицы, и
+    у живой московской программы вместо реального числа встаёт заглушка.
+    Отличать их можно по числу людей: пусто — первый случай, есть люди — второй.
+    """
+    unmatched = [program for program in programs if program.seat_source == "approx"]
+    if not unmatched:
+        return
+    print(
+        f"ВНИМАНИЕ: {len(unmatched)} программ ФА не сопоставились с приказом о КЦП и "
+        f"получили заглушку {UNTRACKED_FALLBACK_PLACES} мест: "
+        + ", ".join(program.title for program in unmatched),
+        file=sys.stderr,
+    )
 
 
 def _tracked_title_map() -> dict[str, int]:
