@@ -98,28 +98,39 @@ def _format_verification(report: VerificationReport | None) -> list[str]:
         names = ", ".join(f"{check.title} ({check.budget_places})" for check in fallback)
         lines.append(f"⚠️ Места из резерва (сайт не ответил): {names}")
 
+    # Сам вердикт оракула печатается СРАЗУ под вердиктом робота
+    # (`_format_site_verdict`) — повторять его здесь незачем. Здесь остаётся
+    # только то, чего там нет: случай, когда сверять вообще нечем.
     placement = report.placement
-    if placement is not None:
-        if placement.status == "match":
-            where = placement.site_title or placement.robot_title or "—"
-            lines.append(f"Прогноз: ✅ сходится с проходными сайта ({where})")
-        elif placement.status == "mismatch":
-            robot = placement.robot_title or "не проходит"
-            site = placement.site_title or "не проходит"
-            lines.append(f"⚠️ Прогноз расходится: робот → {robot}, сайт-порог → {site}")
-        elif placement.status == "boundary":
-            # Балл в точности равен проходному: при равном балле проходит не
-            # каждый (дальше решают ИД и преимущественное право), поэтому спорить
-            # тут не о чем — но и молчать нельзя, это граница удачи.
-            robot = placement.robot_title or "не проходит"
-            site = placement.site_title or "не проходит"
-            lines.append(
-                f"⚖️ Прогноз на границе: робот → {robot}, сайт-порог → {site}; "
-                "ваш балл РАВЕН проходному, при равном балле проходит не каждый"
-            )
-        else:  # unavailable
-            lines.append("ℹ️ Прогноз: нет проходных баллов на сайте — не сверить")
+    if placement is not None and placement.status == "unavailable":
+        lines.append("ℹ️ Прогноз: нет проходных баллов на сайте — не сверить")
     return lines
+
+
+def _format_site_verdict(result: RobotSimulationResult) -> list[str]:
+    """Вердикт оракула — сразу под вердиктом робота, а не внизу письма.
+
+    Робот — модель, оракул — официальные проходные баллы вуза. Когда они
+    расходятся, человеку нужно видеть оба ответа рядом и в одном месте, чтобы
+    не пришлось сопоставлять их самому через полписьма.
+    """
+    report = result.verification
+    placement = report.placement if report else None
+    if placement is None or placement.status == "unavailable":
+        return []
+    site = placement.site_title or "никуда не проходит"
+    if placement.status == "match":
+        return ["  Оракул сайта: то же самое ✅"]
+    if placement.status == "boundary":
+        return [
+            f"  Оракул сайта: {site} ⚖️",
+            "  Расходимся только на границе: ваш балл РАВЕН проходному, "
+            "а при равном балле проходит не каждый",
+        ]
+    return [
+        f"  ⚠️ Оракул сайта: {site}",
+        "  Робот и официальные проходные баллы разошлись — верить стоит сайту",
+    ]
 
 
 def _format_oracle(item: DimaPrioritySnapshot, score: int) -> str:
@@ -163,7 +174,10 @@ def _format_optimistic(result: RobotSimulationResult) -> list[str]:
             f"({item.delta:+d}{check})"
         )
     if not outlook.transfers:
-        lines.append("  На ваших приоритетах квоты добраны — мест столько же, сколько по плану")
+        lines.append(
+            "  Квоты на ваших приоритетах добраны полностью — "
+            "мест строго столько, сколько в КЦП"
+        )
 
     if outlook.placed_program_key is None:
         lines.append("→ И так не проходите ни по одному приоритету")
@@ -172,10 +186,15 @@ def _format_optimistic(result: RobotSimulationResult) -> list[str]:
             f"→ Зачислится: {outlook.placed_title or ''} "
             f"({outlook.priority_used}-й приоритет)"
         )
-    if outlook.placed_program_key == result.dima_placed_program_key:
-        lines.append("  Итог тот же, что и в основном прогнозе")
-    else:
-        lines.append("  ⚠️ Итог отличается от основного прогноза")
+    # Именно этот каскад считает на местах, приближенных к реальным, поэтому
+    # сходиться с оракулом должен он — по нему и судим, попали мы или нет.
+    lines.append(
+        "  Сходится с оракулом сайта ✅"
+        if outlook.matches_site
+        else "  ⚠️ С оракулом сайта не сходится"
+    )
+    if outlook.placed_program_key != result.dima_placed_program_key:
+        lines.append("  (от основного прогноза отличается — там места считаются строго по КЦП)")
     return lines
 
 
@@ -248,6 +267,7 @@ def format_robot_result(result: RobotSimulationResult) -> str:
         via = "БВИ" if result.dima_placed_via == "bvi" else "общий конкурс"
         lines.append(f"→ Зачислится: {result.dima_placed_title or ''}")
         lines.append(f"  {result.dima_priority_used}-й приоритет · этап: {via}")
+    lines.extend(_format_site_verdict(result))
 
     lines.extend(_format_optimistic(result))
     lines.extend(_format_verification(result.verification))

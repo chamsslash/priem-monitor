@@ -20,7 +20,7 @@ from .models import (
     RobotSimulationResult,
 )
 from .universities import SUPPORTED_UNIVERSITIES, fetch_university_pool, read_cached_pool
-from .verification import build_verification_report
+from .verification import _site_placement, build_verification_report
 
 
 def _find_dima_in_pool(people: list[RobotPerson], list_code: str) -> RobotPerson | None:
@@ -438,11 +438,10 @@ def _build_optimistic(
         and program.predicted_places is not None
         and program.predicted_places != program.budget_places
     ]
-    if not any(
-        program.predicted_places is not None
-        and program.predicted_places != program.budget_places
-        for program in programs
-    ):
+    # Блок нужен и когда недобора нет: «квоты добраны, мест ровно по КЦП» — это
+    # содержательный ответ, а не пустота. Молчим только если данных о квотах нет
+    # вовсе (вуз не публикует квотные списки).
+    if not any(program.quota_shortfall is not None for program in programs):
         return None
 
     # Места волны подставляются по ВСЕМ направлениям, а не только по приоритетам
@@ -463,8 +462,13 @@ def _build_optimistic(
         require_consent=require_consent,
         from_cache=False,
     )
+    # Вердикт оракула считается по тем же проходным баллам сайта, что и в
+    # основной сверке, — чтобы «совпал/не совпал» значило одно и то же в обоих
+    # местах ответа.
+    site_key = _site_placement(programs, dima, dima.score)
     placed_key = run.dima_placed_program_key
     return OptimisticOutlook(
+        site_key=site_key,
         transfers=sorted(transfers, key=lambda item: -item.delta),
         placed_program_key=placed_key,
         placed_title=display_titles.get(placed_key, run.dima_placed_title) if placed_key else None,

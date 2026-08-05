@@ -229,10 +229,18 @@ class OptimisticOutlook:
     placed_program_key: str | None
     placed_title: str | None
     priority_used: int | None
+    # Куда селит оракул сайта. Второй каскад считает на местах, приближенных к
+    # реальным, поэтому именно ЕГО вердикт и должен сходиться с сайтом — по
+    # нему и видно, попали мы или нет.
+    site_key: str | None = None
 
     @property
     def gained_places(self) -> int:
         return sum(item.delta for item in self.transfers if item.delta > 0)
+
+    @property
+    def matches_site(self) -> bool:
+        return self.placed_program_key == self.site_key
 
 
 @dataclass
