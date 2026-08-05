@@ -202,8 +202,10 @@ def _passing_cutoff(rows: list[dict]) -> int | None:
     return min(scores) if scores else 0
 
 
-def fetch_direction_rows(direction: str) -> list[dict]:
+def _fetch_direction_pages(direction: str) -> tuple[list[dict], list[int]]:
+    """Все страницы направления: (строки, сколько строк дала каждая страница)."""
     rows: list[dict] = []
+    per_page: list[int] = []
     # Один Session на всю пагинацию направления: страницы идут к тому же хосту
     # подряд, соединение переиспользуется (без нового TCP+TLS на каждую). Session
     # локальный для вызова, а вызов исполняется одним воркер-потоком → потокобезопасно.
@@ -211,7 +213,9 @@ def fetch_direction_rows(direction: str) -> list[dict]:
         response = _get(LIST_URL, params={**BASE_PARAMS, "PROPERTY_394": direction}, session=session)
         for _ in range(MAX_PAGES):
             soup = BeautifulSoup(response.text, "lxml")
-            rows.extend(_rows_from_table(soup))
+            page_rows = _rows_from_table(soup)
+            rows.extend(page_rows)
+            per_page.append(len(page_rows))
 
             next_link = soup.find("a", class_="main-ui-pagination-next")
             href = next_link.get("href") if next_link else None
@@ -225,7 +229,53 @@ def fetch_direction_rows(direction: str) -> list[dict]:
                 "список мог быть обрезан.",
                 file=sys.stderr,
             )
-    return rows
+    return rows, per_page
+
+
+def _looks_truncated(per_page: list[int]) -> bool:
+    """Оборвалась ли пагинация на ПОЛНОЙ странице.
+
+    Естественный конец списка почти всегда даёт неполную последнюю страницу:
+    число абитуриентов редко делится на размер страницы нацело. Если же сайт
+    отдал последнюю страницу полной и при этом убрал ссылку «Следующая» — это
+    почти наверняка троттлинг, а не конец данных.
+
+    Ловим именно молчаливую потерю: обрезанный список не падает с ошибкой, он
+    просто содержит меньше конкурентов, и робот раздаёт места тем, кто в жизни
+    не проходит. Проходной балл при этом уезжает вниз — ровно тот эффект, из-за
+    которого непрофильные направления СТАНКИНа расходились с сайтом.
+    """
+    if len(per_page) < 2:
+        return False
+    page_size = max(per_page)
+    return per_page[-1] == page_size
+
+
+def fetch_direction_rows(direction: str) -> list[dict]:
+    rows, per_page = _fetch_direction_pages(direction)
+    if not _looks_truncated(per_page):
+        return rows
+    # Одна повторная попытка с нуля: троттлинг обычно отпускает, а тихо
+    # сохранённый обрезанный список портит прогноз до следующей пересборки.
+    print(
+        f"ВНИМАНИЕ: список СТАНКИНа по {direction!r} оборвался на полной странице "
+        f"({len(rows)} строк, {len(per_page)} стр.) — похоже на троттлинг. Повторяю.",
+        file=sys.stderr,
+    )
+    retry_rows, retry_per_page = _fetch_direction_pages(direction)
+    if len(retry_rows) <= len(rows):
+        # Второй независимый обход дал не больше первого — значит список
+        # действительно кончился, а полная последняя страница означала лишь,
+        # что число абитуриентов нацело делится на размер страницы.
+        return rows
+    if _looks_truncated(retry_per_page):
+        raise RuntimeError(
+            f"список СТАНКИНа по {direction!r} обрезан троттлингом: повтор дал "
+            f"{len(retry_rows)} строк против {len(rows)} и снова оборвался на полной "
+            "странице. Лучше откатиться на прошлый кэш, чем считать по неполному "
+            "списку конкурентов — робот раздаст места тем, кто в жизни не проходит"
+        )
+    return retry_rows
 
 
 _PLACES_RE = re.compile(r"(\d+)\s+бюджетных мест")
@@ -379,16 +429,22 @@ class StankinFullPool:
                     file=sys.stderr,
                 )
 
-        # Живые места общего конкурса для отслеживаемых направлений (kcp.php).
-        # Тянем только по отслеживаемым — по ним гарантируем точное число;
-        # непрофильные untracked остаются на прежней аппроксимации, чтобы не
-        # грузить троттлящийся сайт лишними запросами. fetch_stankin_seats не
-        # бросает исключений — провал по направлению просто откатит его на резерв.
+        # Живые места общего конкурса по ВСЕМУ каталогу (kcp.php), а не только по
+        # отслеживаемым направлениям. Раньше непрофильные направления получали
+        # места с nap-страницы — а там ПОЛНЫЙ КЦП вместе с квотами, и завышение
+        # доходило до 3.75×: на «15.03.05 Конструкторско-технологическое
+        # обеспечение» робот раздавал 90 мест вместо 24, на «27.03.02 Управление
+        # качеством» — 50 вместо 19. Лишние места забирали конкурентов, которые в
+        # жизни туда не проходят, и проходной балл робота на непрофильных
+        # направлениях уезжал вниз в среднем на 17 баллов (до −53 в худшем
+        # случае). Это не косметика: человек, ошибочно посаженный на чужое
+        # направление, не давит на приоритеты Димы там, где давит на самом деле.
+        # Цена — 21 POST вместо 7; запросы идут по одной сессии, последовательно.
+        # fetch_stankin_seats не бросает исключений: провал по направлению просто
+        # откатит его на прежнюю цепочку резервов.
         live_seats: dict[str, int] = {}
         with requests.Session() as seats_session:
-            for direction in direction_groups:
-                if direction not in catalog_set:
-                    continue
+            for direction in catalog:
                 places = fetch_stankin_seats(direction, session=seats_session)
                 if places is not None:
                     live_seats[direction] = places
@@ -437,7 +493,12 @@ class StankinFullPool:
         kcp_places: dict[str, int],
     ) -> tuple[int | None, str]:
         """Число мест + провенанс. Отслеживаемые: живьём → резерв → nap → конфиг.
-        Непрофильные: nap → грубая аппроксимация."""
+        Непрофильные: живьём → nap → грубая аппроксимация.
+
+        nap стоит ПОСЛЕ живого числа не для порядка: он отдаёт полный КЦП вместе
+        с квотами и завышает места в разы (см. комментарий в `_fetch_all`).
+        Аварийный путь, а не источник.
+        """
         if tracked_key is not None:
             if direction in live_seats:
                 return live_seats[direction], "live"
@@ -464,8 +525,18 @@ class StankinFullPool:
                 file=sys.stderr,
             )
             return total, "config"
+        if direction in live_seats:
+            return live_seats[direction], "live"
         nap = kcp_places.get(direction)
         if nap is not None:
+            print(
+                f"ВНИМАНИЕ: живое число мест общего конкурса СТАНКИНа по {direction!r} "
+                f"недоступно (kcp.php вернул 0 или не ответил) — взят полный КЦП с "
+                f"nap-страницы = {nap}, а он включает квоты и завышает места. Робот "
+                "посадит сюда лишних конкурентов, и проходной балл по этому "
+                "направлению будет занижен.",
+                file=sys.stderr,
+            )
             return nap, "nap"
         return UNTRACKED_FALLBACK_PLACES, "approx"
 
