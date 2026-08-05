@@ -343,13 +343,14 @@ CACHE_TTL_SEC = 7200
 # том, что робот считает по неполному списку конкурентов и раздаёт места тем,
 # кто не проходит.
 #
-# Значение подобрано замером, а не на глаз: на двух воркерах сборка занимает
-# 655 c, на трёх — 465 c, и обе дают ОДИНАКОВЫЕ 8170 человек при 21 направлении
-# без единого пустого. Выше трёх не поднимаем: на шести поломка уже воспроизведена.
+# Значение подобрано замером, а не на глаз. Три замера подряд, один и тот же
+# каталог: 2 воркера — 655 c, 3 воркера — 459 c, 5 воркеров — 308 c, и все три
+# дали ОДИНАКОВЫЕ 45732 строки, цифра в цифру по каждому направлению. Выше пяти
+# не поднимаем: на шести поломка воспроизведена (589 человек вместо 8255).
 # Страховка от остаточного троттлинга — детектор обрыва на полной странице в
 # fetch_direction_rows: он перекачивает направление и валит сборку, если обрыв
 # повторяется, чтобы откатиться на прошлый кэш вместо записи неполного пула.
-MAX_WORKERS = 3
+MAX_WORKERS = 5
 UNTRACKED_FALLBACK_PLACES = 30  # аппроксимация мест ТОЛЬКО для непрофильных untracked-программ каскада (вне охвата гарантии реальных мест)
 # Реальные места ОБЩЕГО КОНКУРСА («Основной бюджет») по отслеживаемым конкурсным
 # группам. Источник — официальная страница ranked-lists priem.stankin.ru,
@@ -400,8 +401,7 @@ class StankinFullPool:
                 return cached
         try:
             catalog = fetch_catalog()
-            kcp_places = self._safe_kcp_places(catalog)
-            people, programs = self._fetch_all(catalog, kcp_places)
+            people, programs = self._fetch_all(catalog)
             fetched_at = datetime.now(timezone.utc).isoformat()
             self._save_cache(people, programs, fetched_at)
             return people, programs, fetched_at, False
@@ -412,15 +412,23 @@ class StankinFullPool:
             raise
 
     @staticmethod
-    def _safe_kcp_places(catalog: list[str]) -> dict[str, int]:
+    def _safe_kcp_places(directions: list[str]) -> dict[str, int]:
+        """nap-страницы ТОЛЬКО для направлений, по которым не ответил kcp.php.
+
+        Раньше они тянулись для всего каталога заранее — 21 запрос и 8 секунд на
+        каждую сборку, — и почти всегда выбрасывались: kcp.php отвечает по всем
+        направлениям, а nap стоит ниже него в цепочке резервов. Хуже того, nap
+        отдаёт полный КЦП вместе с квотами и завышает места в разы, так что это
+        был предзаказ данных, которые мы не хотим использовать.
+        """
+        if not directions:
+            return {}
         try:
-            return fetch_kcp_places(catalog)
+            return fetch_kcp_places(directions)
         except Exception:
             return {}
 
-    def _fetch_all(
-        self, catalog: list[str], kcp_places: dict[str, int]
-    ) -> tuple[list[RobotPerson], list[RobotProgram]]:
+    def _fetch_all(self, catalog: list[str]) -> tuple[list[RobotPerson], list[RobotProgram]]:
         rows_by_direction: dict[str, list[dict]] = {}
         failed_directions: list[str] = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -490,6 +498,9 @@ class StankinFullPool:
                 places = fetch_stankin_seats(direction, session=seats_session)
                 if places is not None:
                     live_seats[direction] = places
+
+        # nap — только там, где живого числа не оказалось (см. _safe_kcp_places).
+        kcp_places = self._safe_kcp_places([d for d in catalog if d not in live_seats])
 
         programs: list[RobotProgram] = []
         people: dict[str, RobotPerson] = {}
