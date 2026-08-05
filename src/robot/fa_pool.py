@@ -279,12 +279,19 @@ class FaFullPool:
         places = _places_map()
         programs: list[RobotProgram] = []
         for title in catalog:
+            # У ФА нет машинного источника мест: fa.ru отдаёт конкурсные списки,
+            # но не КЦП. Провенанс проставляем честно — «config» для чисел,
+            # снятых вручную с официального КЦП, «approx» для грубой
+            # аппроксимации непрофильных направлений. Живого источника («live»)
+            # здесь не бывает, и сверка мест не должна делать вид, что бывает.
+            known = places.get(title)
             programs.append(
                 RobotProgram(
                     key=title,
                     title=title,
-                    budget_places=places.get(title, UNTRACKED_FALLBACK_PLACES),
+                    budget_places=known if known is not None else UNTRACKED_FALLBACK_PLACES,
                     tracked_id=tracked.get(title),
+                    seat_source="config" if known is not None else "approx",
                 )
             )
         return programs
