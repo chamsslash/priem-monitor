@@ -76,6 +76,15 @@ class FaFullPool:
         "score": "Сумма конкурсных баллов",
         "consent": "Наличие согласия на зачисление",
     }
+    # Вердикт самого вуза: «Да» у тех, кто РЕАЛЬНО проходит сюда по своему высшему
+    # проходящему приоритету с учётом согласия — проверено живьём на «Прикладном
+    # машинном обучении»: все 78 отмеченных подали согласие. Семантически это то
+    # же, что «Высший проходной приоритет» у СТАНКИНа, и берём именно её, а не
+    # «Основной высший приоритет» (та консент-независимая, мерила бы другой
+    # вопрос). Каскад её НЕ читает — она уходит в passing_cutoff как независимый
+    # оракул для сверки прогноза. Колонки может не быть (другая стадия приёма) —
+    # тогда сверять не с чем, и это не повод ронять сборку.
+    TOP_PASSING_LABEL = "Высший проходной приоритет"
 
     def build(self, *, use_cache: bool = True) -> tuple[list[RobotPerson], list[RobotProgram], str, bool]:
         if use_cache:
@@ -87,7 +96,7 @@ class FaFullPool:
             catalog = self._catalog_from_api()
             rows = self._fetch_all_rows(catalog)
             people = self._merge_people(rows)
-            programs = self._build_programs(catalog)
+            programs = self._build_programs(catalog, self._site_verdict(rows))
             fetched_at = datetime.now(timezone.utc).isoformat()
             self._save_cache(people, programs, fetched_at)
             return people, programs, fetched_at, False
@@ -237,6 +246,7 @@ class FaFullPool:
             code = fields[self.FIELD_LABELS["code"]].strip()
             if not code:
                 continue
+            top_passing = fields.get(self.TOP_PASSING_LABEL)
             rows.append(
                 {
                     "code": code,
@@ -245,9 +255,30 @@ class FaFullPool:
                     "consent": normalize_yes(fields[self.FIELD_LABELS["consent"]]),
                     "is_bvi": normalize_yes(fields[self.FIELD_LABELS["is_bvi"]]),
                     "priority": to_int(fields[self.FIELD_LABELS["priority"]]) or 99,
+                    "top_passing": normalize_yes(top_passing) if top_passing is not None else None,
                 }
             )
         return rows
+
+    @staticmethod
+    def _site_verdict(rows: list[dict]) -> dict[str, tuple[int, int]]:
+        """Программа → (проходной балл сайта, сколько человек сайт туда зачисляет).
+
+        Балл — минимальный среди отмеченных «Высший проходной приоритет»; 0 —
+        колонка есть, но не проходит никто (места открыты). Счётчик нужен как
+        нижняя граница числа мест: сайт не зачислит больше, чем есть мест, и если
+        он зачисляет больше, чем стоит у нас в config, — значит наше число врёт.
+        Программы без колонки в словарь не попадают вовсе."""
+        scores: dict[str, list[int]] = {}
+        for row in rows:
+            if row.get("top_passing") is None:
+                continue
+            bucket = scores.setdefault(row["program_key"], [])
+            if row["top_passing"]:
+                bucket.append(row["score"])
+        return {
+            title: ((min(values) if values else 0), len(values)) for title, values in scores.items()
+        }
 
     @staticmethod
     def _merge_people(rows: list[dict]) -> list[RobotPerson]:
@@ -274,7 +305,9 @@ class FaFullPool:
             person.is_bvi = person.has_bvi_choice()
         return list(people.values())
 
-    def _build_programs(self, catalog: list[str]) -> list[RobotProgram]:
+    def _build_programs(
+        self, catalog: list[str], verdict: dict[str, tuple[int, int]]
+    ) -> list[RobotProgram]:
         tracked = _tracked_title_map()
         places = _places_map()
         programs: list[RobotProgram] = []
@@ -292,6 +325,8 @@ class FaFullPool:
                     budget_places=known if known is not None else UNTRACKED_FALLBACK_PLACES,
                     tracked_id=tracked.get(title),
                     seat_source="config" if known is not None else "approx",
+                    passing_cutoff=verdict[title][0] if title in verdict else None,
+                    site_passing_count=verdict[title][1] if title in verdict else None,
                 )
             )
         return programs

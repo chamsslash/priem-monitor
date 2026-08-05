@@ -262,29 +262,55 @@ def audit_mirea(programs: list[RobotProgram]) -> list[SeatAudit]:
 
 
 def audit_fa(programs: list[RobotProgram]) -> list[SeatAudit]:
-    """ФА: машинного источника мест нет — фиксируем это явно, а не молчим.
+    """ФА: прямого источника мест нет, но косвенная проверка есть.
 
     fa.ru отдаёт конкурсные списки, но не КЦП: числа в config сняты вручную с
     официального КЦП 2026/2027 (очная, Москва) как КЦП − особая − отдельная −
-    целевая. Автосверка тут невозможна без выбора неофициального источника, а
-    угадывать источник для авторитетных цифр — ровно та ошибка, из-за которой
-    места протухали. Строка со статусом no_oracle нужна, чтобы ФА не выглядел
-    «проверенным» наравне с остальными.
+    целевая. Полноценной автосверки не выйдет без выбора неофициального
+    источника, а угадывать источник для авторитетных цифр — ровно та ошибка, из-за
+    которой места протухали.
+
+    Зато есть нижняя граница: сколько человек сайт САМ отметил проходящими.
+    Больше, чем есть мест, вуз зачислить не может, поэтому «проходящих больше,
+    чем мест в config» — доказательство, что наше число занижено. Так и нашлось,
+    что у «Прикладных ИС в экономике и финансах» сайт зачисляет 78 при 62 у нас:
+    плановые 62 = КЦП 79 − квоты 17, а вуз незаполненные квоты вернул в общий
+    конкурс. Симметричной проверки сверху нет — завышение так не поймать.
     """
     config = _config_places("Финансовый университет")
-    return [
-        SeatAudit(
-            university="Финансовый университет",
-            title=program.title,
-            robot_places=program.budget_places,
-            robot_source=program.seat_source,
-            official_places=None,
-            local_places=config.get(program.tracked_id),
-            status=STATUS_NO_ORACLE,
-            note="fa.ru не публикует КЦП машинно — число из config, сверяется вручную",
+    audits: list[SeatAudit] = []
+    for program in _tracked(programs):
+        passing = program.site_passing_count
+        places = program.budget_places
+        if passing is not None and places is not None and passing > places:
+            status = STATUS_MISMATCH
+            note = (
+                f"сайт уже зачисляет {passing} человек, а в config {places} мест — "
+                "число занижено (похоже, вуз перенёс незаполненные квоты в общий "
+                "конкурс); робот недосчитывает мест и занижает шансы"
+            )
+        elif passing is not None:
+            status = STATUS_NO_ORACLE
+            note = (
+                f"КЦП машинно нет, число из config; сайт зачисляет {passing} — "
+                f"в {places} мест укладывается, противоречия нет"
+            )
+        else:
+            status = STATUS_NO_ORACLE
+            note = "fa.ru не публикует КЦП машинно — число из config, сверяется вручную"
+        audits.append(
+            SeatAudit(
+                university="Финансовый университет",
+                title=program.title,
+                robot_places=places,
+                robot_source=program.seat_source,
+                official_places=None,
+                local_places=config.get(program.tracked_id),
+                status=status,
+                note=note,
+            )
         )
-        for program in _tracked(programs)
-    ]
+    return audits
 
 
 def check_no_paid_seats(university: str, programs: list[RobotProgram]) -> tuple[bool, str]:
