@@ -418,30 +418,48 @@ def fetch_list_vacant(list_id: str) -> int | None:
 QUOTA_URL_TEMPLATE = "https://pk.mpei.ru/info/{list_id}"
 
 
-def fetch_quota_enrolled(list_id: str) -> int:
-    """Сколько человек РЕАЛЬНО зачислено по этому квотному списку.
+def fetch_quota_enrolled(list_id: str) -> set[str]:
+    """КОДЫ тех, кто реально занял место по этому квотному списку.
 
     Квотные списки лежат по другому адресу, чем списки общего конкурса:
     /info/entrants_listNNN.html вместо /inform/listNNNbacc.html (последний на
-    квотном id молча отдаёт индексную страницу). Считаем отметки «Высший
+    квотном id молча отдаёт индексную страницу). Берём отметки «Высший
     проходной» — это вердикт вуза по КВОТНОМУ конкурсу, отдельному от общего.
+
+    Возвращаются именно коды, а не количество, по двум причинам:
+
+    * **Один человек попадает в несколько списков.** У целевой квоты список
+      свой на каждого заказчика (у «Электроэнергетики» их 20), и абитуриент
+      подаёт сразу к нескольким. Складывая количества, мы считали его столько
+      раз, в скольких списках он есть: выходило 127 «занятых» мест из 90.
+    * **Забравшие документы место не занимают.** Их 18% от всех отмеченных
+      (120 из 660), и засчитывать их как занявших — значит занижать недобор.
     """
     soup = BeautifulSoup(_get(QUOTA_URL_TEMPLATE.format(list_id=list_id)), "lxml")
     tables = soup.find_all("table")
     if not tables:
-        return 0
+        return set()
     rows = max(tables, key=lambda item: len(item.find_all("tr"))).find_all("tr")
     if len(rows) < 3:
-        return 0
+        return set()
     headers = _expand_row_cells(rows[0])
     top_idx = header_index(headers, "высший проходной")
-    if top_idx is None:
-        return 0
-    return sum(
-        1
-        for row in rows[2:]
-        if len(cells := _expand_row_cells(row)) > top_idx and normalize_yes(cells[top_idx])
-    )
+    code_idx = header_index(headers, "уникальный код")
+    note_idx = header_index(headers, "примечание")
+    if top_idx is None or code_idx is None:
+        return set()
+    enrolled: set[str] = set()
+    for row in rows[2:]:
+        cells = _expand_row_cells(row)
+        if len(cells) <= max(top_idx, code_idx) or not normalize_yes(cells[top_idx]):
+            continue
+        note = cells[note_idx] if note_idx is not None and note_idx < len(cells) else ""
+        if "Забрал документы" in note or "Исключен" in note:
+            continue
+        code = cells[code_idx].strip()
+        if code:
+            enrolled.add(code)
+    return enrolled
 
 
 @dataclass
@@ -450,10 +468,16 @@ class QuotaShortfall:
 
     Зачем считать самим, а не читать «вакантные места» со страницы волны:
     вакантные места — это уже ответ сайта (их ровно столько же, сколько людей
-    он отметил проходящими), и каскад, взяв их на вход,сверять было бы не с
+    он отметил проходящими), и каскад, взяв их на вход, сверять было бы не с
     чем. Недобор же выводится из НЕЗАВИСИМЫХ данных: официальный КЦП по видам
     квот минус фактически зачисленные по квотным спискам. Это наш собственный
     вывод, а не подсказка вуза.
+
+    Целевая квота считается наравне с остальными — незанятые целевые места вуз
+    тоже возвращает в общий конкурс. Проверено на 27 группах: с учётом целевой
+    средняя ошибка предиктa 1.85 места, без неё 3.11. Нагляднее всего на
+    «Интеллектуальных системах», где по плану мест общего конкурса ноль, а на
+    волне 26 — и они объясняются именно недобором квот.
     """
 
     special: int = 0
@@ -466,7 +490,7 @@ class QuotaShortfall:
 
 
 def compute_quota_shortfall(
-    group: KcpGroup, lists_by_kind: dict[str, list[str]]
+    group: KcpGroup, lists_by_kind: dict[str, list[str]], group_title: str = ""
 ) -> QuotaShortfall:
     """Незанятые квотные места, которые вуз возвращает в общий конкурс."""
     shortfall = QuotaShortfall()
@@ -474,8 +498,25 @@ def compute_quota_shortfall(
         places = group.quota_places(kind)
         if places <= 0:
             continue
-        enrolled = sum(fetch_quota_enrolled(list_id) for list_id in lists_by_kind.get(kind, []))
-        setattr(shortfall, kind, max(places - enrolled, 0))
+        # Объединение, а не сумма: один абитуриент встречается в нескольких
+        # списках одной квоты (у целевой список свой на каждого заказчика).
+        enrolled: set[str] = set()
+        for list_id in lists_by_kind.get(kind, []):
+            enrolled |= fetch_quota_enrolled(list_id)
+        if len(enrolled) > places:
+            # Занявших больше, чем мест по КЦП, быть не может — значит по этой
+            # квоте модель не работает (например, список общий на несколько
+            # конкурсных групп). Молча писать «недобора нет» нельзя: это
+            # прячет отказ модели под видом обычного результата.
+            print(
+                f"ВНИМАНИЕ: у группы МЭИ «{group_title}» по квоте «{kind}» мест {places}, "
+                f"а занявшими отмечено {len(enrolled)} человек — больше, чем мест. "
+                "Недобор по этой квоте не учитывается; предикт мест будет "
+                "пессимистичнее реального.",
+                file=sys.stderr,
+            )
+            continue
+        setattr(shortfall, kind, places - len(enrolled))
     return shortfall
 
 
@@ -537,7 +578,9 @@ class MpeiFullPool:
             if group is None:
                 return None
             try:
-                return title, compute_quota_shortfall(group, quota_lists.get(title, {})).total
+                return title, compute_quota_shortfall(
+                    group, quota_lists.get(title, {}), title
+                ).total
             except Exception:  # noqa: BLE001
                 return None
 
