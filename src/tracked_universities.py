@@ -7,12 +7,10 @@ TRACKED_UNIVERSITIES: tuple[str, ...] = (
     "МЭИ",
     "МИРЭА",
     "СТАНКИН",
-    # "Московский политех" временно отключён: сервер mospolytech.ru не
-    # досылает промежуточный TLS-сертификат (подтверждено live через
-    # openssl s_client -showcerts — шлют только листовой сертификат), из-за
-    # чего все профили стабильно валятся с SSLCertVerificationError каждый
-    # цикл обновления. Проблема на их стороне. Вернуть строку обратно, когда
-    # починят цепочку сертификатов.
+    # TLS mospolytech.ru (не досылает промежуточный сертификат) починен своим
+    # бандлом в polytech_pool._ca_bundle(): certifi + промежуточный сертификат
+    # из config/certs/globalsign-gcc-r3-dv-tls-ca-2020.pem.
+    "Московский политех",
 )
 
 _TRACKED_SET = frozenset(TRACKED_UNIVERSITIES)

@@ -11,6 +11,8 @@ from .mirea_pool import fetch_mirea_full_pool, read_mirea_cached_pool
 from .models import RobotPerson, RobotProgram
 from .mpei_pool import CACHE_TTL_SEC as MPEI_CACHE_TTL_SEC
 from .mpei_pool import fetch_mpei_full_pool, read_mpei_cached_pool
+from .polytech_pool import CACHE_TTL_SEC as POLYTECH_CACHE_TTL_SEC
+from .polytech_pool import fetch_polytech_full_pool, read_polytech_cached_pool
 from .stankin_pool import CACHE_TTL_SEC as STANKIN_CACHE_TTL_SEC
 from .stankin_pool import fetch_stankin_full_pool, read_stankin_cached_pool
 
@@ -23,6 +25,7 @@ SUPPORTED_UNIVERSITIES: dict[str, str] = {
     "МЭИ": "mpei",
     "МИРЭА": "mirea",
     "СТАНКИН": "stankin",
+    "Московский политех": "mospolytech",
 }
 
 if set(SUPPORTED_UNIVERSITIES) != set(TRACKED_UNIVERSITIES):
@@ -35,6 +38,7 @@ _POOL_FETCHERS: dict[str, PoolFetcher] = {
     "mirea": fetch_mirea_full_pool,
     "mpei": fetch_mpei_full_pool,
     "stankin": fetch_stankin_full_pool,
+    "mospolytech": fetch_polytech_full_pool,
 }
 
 
@@ -50,6 +54,7 @@ _CACHE_READERS: dict[str, CacheReader] = {
     "mirea": read_mirea_cached_pool,
     "mpei": read_mpei_cached_pool,
     "stankin": read_stankin_cached_pool,
+    "mospolytech": read_polytech_cached_pool,
 }
 
 # TTL берём из самих пулов, а не дублируем число: если пул поменяет свой срок
@@ -59,6 +64,7 @@ _CACHE_TTLS: dict[str, int] = {
     "mirea": MIREA_CACHE_TTL_SEC,
     "mpei": MPEI_CACHE_TTL_SEC,
     "stankin": STANKIN_CACHE_TTL_SEC,
+    "mospolytech": POLYTECH_CACHE_TTL_SEC,
 }
 
 if set(_CACHE_READERS) != set(_POOL_FETCHERS) or set(_CACHE_TTLS) != set(_POOL_FETCHERS):
@@ -75,6 +81,7 @@ _EXPECTED_REFRESH_SEC = {
     "mpei": 35,  # 27 списков общего конкурса + ~200 квотных, 6 потоков
     "fa": 225,  # ~500 страниц по 100 строк, 10 потоков
     "stankin": 205,  # ~940 страниц по 50 строк, 8 потоков
+    "mospolytech": 20,  # 66 направлений, ~15455 человек, 15-17с живьём, 6 потоков
 }
 
 
