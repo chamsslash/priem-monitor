@@ -488,8 +488,23 @@ def _tracked_by_spec() -> dict[str, ProgramConfig]:
     mapping: dict[str, ProgramConfig] = {}
     for program in tracked_programs():
         spec = program.parser_meta.get("specCode")
-        if spec:
-            mapping[spec] = program
+        if not spec:
+            continue
+        existing = mapping.get(spec)
+        if existing is not None:
+            # Не гипотетическое: до этой ветки id26 и id76 сидели в одном
+            # названии направления. Если сайт снова сольёт два профиля в один
+            # specCode, одна из программ молча выпадет из tracked — приоритеты
+            # Димы пропадут из симуляции без единого сообщения. Полную
+            # группировку (как stankin_pool._tracked_direction_groups) здесь
+            # не делаем — этого предупреждения достаточно, чтобы заметить.
+            print(
+                f"ВНИМАНИЕ: specCode={spec!r} у Политеха отслеживают сразу id={existing.id} "
+                f"и id={program.id} — второй перезапишет первого в tracked, id={existing.id} "
+                "тихо выпадет из симуляции.",
+                file=sys.stderr,
+            )
+        mapping[spec] = program
     return mapping
 
 
