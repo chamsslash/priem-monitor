@@ -308,9 +308,13 @@ def format_competitors(result: RobotSimulationResult, tracked_id: int) -> str:
 
     state = next((item for item in result.user_programs if item.tracked_id == tracked_id), None)
     if state is None:
-        available = ", ".join(
-            str(item.tracked_id) for item in result.user_programs if item.tracked_id is not None
-        )
+        codes = [item.tracked_id for item in result.user_programs if item.tracked_id is not None]
+        # Направления теперь берутся из пула, а не только из конфига — у части
+        # (а иногда и у всех, как в примере МИРЭА/1616947) tracked_id может не
+        # быть вовсе, потому что короткого числового кода из config/programs.json
+        # для них просто нет. Пустой список кодов — это не «нет данных», это
+        # штатный случай, и молчать хвостом после «Доступные коды: » нельзя.
+        available = ", ".join(str(code) for code in codes) if codes else "нет — ни у одного вашего направления нет короткого кода из конфига"
         return f"🤖 Конкуренты — {result.university}\n\nНет направления с кодом {tracked_id}. Доступные коды: {available}"
 
     competitors = result.dima_competitors_by_program.get(state.program_key)

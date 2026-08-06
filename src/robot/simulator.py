@@ -89,6 +89,15 @@ def _apply_priority_order(
                 program_key=program_key,
                 priority=index + 1,
                 is_bvi=original.is_bvi if original is not None else False,
+                # Без переноса этого флага пересборка выборов при сохранённом
+                # порядке приоритетов «забывала» бы, что сайт уже вычеркнул
+                # человека отсюда («Зачисляется в другой КГ» / «Исключен —
+                # зачислен на другой конкурс»): ProgramChoice по умолчанию
+                # enrolls_elsewhere=False, и каскад (ordered_program_keys())
+                # снова считал бы место здесь свободным для него — то есть
+                # сажал бы человека туда, где сайт уже видит другого, и дважды
+                # отдавал бы то же место.
+                enrolls_elsewhere=original.enrolls_elsewhere if original is not None else False,
             )
         )
 
@@ -141,9 +150,14 @@ def _resolve_dima_person(
             # его тоже нужно показывать. Это по-прежнему так и при True: такие
             # выборы остаются в dima.choices, а pool_keys внутри
             # _apply_priority_order строится по choices целиком, а не по
-            # урезанному ordered_program_keys() — из каскада их убирает
-            # отдельный флаг enrolls_elsewhere, а не этот. Проверено живьём на
-            # реальном коде МИРЭА с сохранённым переупорядочиванием.
+            # урезанному ordered_program_keys(). Но «видимость» и «каскад его
+            # не занимает» — два РАЗНЫХ инварианта: то, что выбор виден в
+            # показе, не значит, что enrolls_elsewhere сохранился и после
+            # пересборки внутри _apply_priority_order — этот флаг там нужно
+            # переносить явно (см. комментарий у new_choices.append ниже по
+            # файлу), иначе каскад посчитает место снова свободным. Проверено
+            # живьём на реальном коде МИРЭА с сохранённым переупорядочиванием:
+            # направление видно в показе И каскад его не занимает.
             dima = _apply_priority_order(dima, tracked_programs, saved_ids, require_in_pool=True)
         return dima, True
     return _build_dima_person(settings, university_cfg, tracked_programs, priority_ids=priority_ids), False
