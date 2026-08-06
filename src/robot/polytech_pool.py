@@ -1,12 +1,25 @@
 from __future__ import annotations
 
+import json
 import os
+import re
+import sys
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict
+from datetime import datetime, timezone
+from html import unescape
 from pathlib import Path
 
 import certifi
 import requests
 from bs4 import BeautifulSoup
+
+from ..config_loader import load_programs
+from ..models import ProgramConfig
+from ..parsers.utils import normalize_yes, to_int
+from .models import ProgramChoice, RobotPerson, RobotProgram
 
 CATALOG_PAGE_URL = "https://mospolytech.ru/postupayushchim/priem-v-universitet/rating-abiturientov/"
 LIST_URL = "https://mospolytech.ru/postupayushchim/priem-v-universitet/rating-abiturientov/fio_list_curl.php"
@@ -197,3 +210,385 @@ FALLBACK_CATALOG: list[str] = [
     "54.03.01_Цифровой дизайн",
     "54.05.03_Художник анимации и компьютерной графики; Художник-график (Оформление печатной продукции)",
 ]
+
+
+# --- Разбор ответа fio_list_curl.php -----------------------------------
+
+_HEADER_CODE_RE = re.compile(r"^\d\d\.\d\d\.\d\d")
+_TAG_RE = re.compile(r"<[^>]+>")
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+_TR_RE = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.S | re.I)
+_TD_RE = re.compile(r"<td\b[^>]*>(.*?)</td>", re.S | re.I)
+
+
+def _cell_text(raw_cell_html: str) -> str:
+    return re.sub(r"\s+", " ", unescape(_TAG_RE.sub(" ", raw_cell_html))).strip()
+
+
+def _rows_from_html(page_html: str) -> list[list[str]]:
+    """Все <tr> страницы направления как списки текстов ячеек.
+
+    Разбор — регулярками по сырому HTML, а не BeautifulSoup. Две причины:
+
+    1. Производительность. Ответ на одно направление — до ~11 МБ HTML с
+       несколькими тысячами строк; BeautifulSoup+lxml строит полное дерево
+       Python-объектов, и на 66 направлениях (даже в 6 потоков — GIL не
+       отпускается на чистом обходе дерева) сборка пула растягивалась до
+       ~120 c при бюджете < 60 c. Регэксп-скан того же документа занимает
+       ~0.1–0.2 c.
+    2. Надёжность. На части направлений (например «Системная и программная
+       инженерия») lxml из-за неаккуратной вёрстки сайта где-то в документе
+       схлопывает большой кусок таблицы в ОДНУ <td> — get_text() на ней
+       отдаёт склеенный текст всей области (десятки тысяч «слов»), и такая
+       строка-мусор может перехватить поиск заголовка раньше настоящего.
+       Плоский регэксп-скан по тексту такому сбою не подвержен: он просто
+       парами находит теги, не пытаясь восстановить дерево.
+
+    Комментарии вычищаются ИЗ ВСЕГО ДОКУМЕНТА заранее, а не после разбора на
+    ячейки: в шаблоне строки абитуриента сайт физически оставляет закомме-
+    ченную <td>...</td> (дубль «Суммы баллов по предметам»). Если не убрать
+    комментарии до поиска <td>, регэксп посчитает её настоящей ячейкой и все
+    индексы после неё съедут на одну позицию у части строк.
+    """
+    cleaned = _COMMENT_RE.sub(" ", page_html)
+    rows: list[list[str]] = []
+    for match in _TR_RE.finditer(cleaned):
+        cells = [_cell_text(cell) for cell in _TD_RE.findall(match.group(1))]
+        if cells:
+            rows.append(cells)
+    return rows
+
+
+def _parse_header(rows: list[list[str]]) -> tuple[str, str, int]:
+    """Шапка направления: (код ОКСО, название, места общего конкурса).
+
+    Места — это индекс 7 («Остаток бюджетных мест на общий конкурс»), а НЕ
+    индекс 2 («Количество бюджетных мест») — тот включает квоты (целевую,
+    особую, отдельную) и завышает то, что реально разыгрывается в общем
+    конкурсе, который симулирует робот.
+    """
+    for cells in rows:
+        if len(cells) == 9 and _HEADER_CODE_RE.match(cells[0]):
+            return cells[0], cells[1], int(cells[7])
+    raise ValueError(
+        "Не найдена строка шапки направления (9 ячеек, код вида XX.XX.XX) — "
+        "сайт мог поменять вёрстку ответа fio_list_curl.php. Молча подставлять "
+        "число мест нельзя: именно из-за этого места дважды протухали."
+    )
+
+
+def _exact_header_index(cells: list[str], name: str) -> int | None:
+    """Индекс ячейки, ТОЧНО равной name (без учёта регистра/пробелов).
+
+    header_index() из parsers.utils ищет по вхождению подстроки — она не
+    годится для колонки «Приоритет»: это подстрока и «Балл приоритет 1», и
+    «Основной высший приоритет», и «Высший проходной приоритет», так что
+    первый же substring-матч попал бы не туда. Нужно точное совпадение.
+    """
+    target = re.sub(r"\s+", " ", name.strip().lower())
+    for index, cell in enumerate(cells):
+        if re.sub(r"\s+", " ", cell.strip().lower()) == target:
+            return index
+    return None
+
+
+# Реальная строка заголовка таблицы абитуриентов — это несколько десятков
+# ячеек (обычных колонок ИТ-направлений — 23, у самых «широких» творческих —
+# заметно меньше полусотни). Верхняя граница нужна, чтобы не спутать её со
+# строкой-мусором: замечено, что при DOM-разборе (BeautifulSoup/lxml) части
+# страниц Политеха из-за битой вёрстки где-то раньше в документе схлопывают
+# огромный кусок таблицы в ОДНУ <td>, и get_text() на ней возвращает текст
+# всей схлопнутой области — такая строка тоже проходит проверку «есть код +
+# есть балл» и перехватывает поиск раньше настоящего заголовка. У нашего
+# регэксп-разбора (см. _rows_from_html) такого сбоя нет, но граница оставлена
+# как дешёвая страховка — настоящих заголовков с сотней и более колонок на
+# этом сайте не бывает.
+_MAX_HEADER_CELLS = 100
+
+
+def _people_columns(rows: list[list[str]]) -> dict[str, int] | None:
+    """Позиции нужных колонок в таблице абитуриентов по тексту заголовка.
+
+    НЕ фиксированные номера: число колонок «Балл приоритет N» у списка
+    зависит от направления — у обычных (ИТ и т.п.) их 3, у творческих
+    (архитектура/дизайн/графика) может быть больше, и тогда все индексы
+    после них съезжают. Единственный устойчивый способ — искать колонки по
+    названию в строке заголовка этой же таблицы, как в stankin_pool/mpei_pool.
+    """
+    for cells in rows:
+        if len(cells) > _MAX_HEADER_CELLS:
+            continue
+        code_idx = _exact_header_index(cells, "уникальный код")
+        score_idx = _exact_header_index(cells, "конкурсный балл")
+        if code_idx is None or score_idx is None:
+            continue
+        consent_idx = _exact_header_index(cells, "согласие")
+        priority_idx = _exact_header_index(cells, "приоритет")
+        top_idx = _exact_header_index(cells, "высший проходной приоритет")
+        if None in (consent_idx, priority_idx, top_idx):
+            continue
+        return {
+            "code": code_idx,
+            "score": score_idx,
+            "consent": consent_idx,
+            "priority": priority_idx,
+            "top": top_idx,
+        }
+    return None
+
+
+def _parse_people(rows: list[list[str]]) -> list[dict]:
+    """Строки абитуриентов: колонки определяются по заголовку таблицы,
+    строки — первая ячейка (порядковый номер) числовая."""
+    columns = _people_columns(rows)
+    if columns is None:
+        raise ValueError(
+            "Не найдена таблица абитуриентов Политеха (нет колонок «Уникальный "
+            "код»/«Конкурсный балл»/«Согласие»/«Приоритет»/«Высший проходной "
+            "приоритет») — сайт мог поменять вёрстку ответа fio_list_curl.php."
+        )
+    last_idx = max(columns.values())
+
+    result: list[dict] = []
+    for cells in rows:
+        if len(cells) <= last_idx or not cells[0].strip().isdigit():
+            continue
+        score = to_int(cells[columns["score"]])
+        if not score or score <= 0:
+            continue
+        code = cells[columns["code"]].strip()
+        if not code:
+            continue
+        priority_cell = cells[columns["priority"]].strip()
+        top_passing_cell = cells[columns["top"]].strip()
+        result.append(
+            {
+                "code": code,
+                "score": score,
+                "consent": normalize_yes(cells[columns["consent"]]),
+                "priority": to_int(priority_cell) or 99,
+                # «Проходит сюда»: высший проходной приоритет непуст и равен
+                # заявленному приоритету абитуриента на это направление.
+                "top_passing": bool(top_passing_cell) and top_passing_cell == priority_cell,
+            }
+        )
+    return result
+
+
+def _passing_cutoff(rows: list[dict]) -> int | None:
+    """Проходной балл среди прошедших. Семантика — как в stankin_pool."""
+    if not any(row.get("top_passing") is not None for row in rows):
+        return None
+    scores = [row["score"] for row in rows if row.get("top_passing") is True]
+    return min(scores) if scores else 0
+
+
+def _passing_count(rows: list[dict]) -> int | None:
+    """Сколько абитуриентов сайт отметил проходящими. Как в stankin_pool."""
+    if not any(row.get("top_passing") is not None for row in rows):
+        return None
+    return sum(1 for row in rows if row.get("top_passing") is True)
+
+
+# --- Сборка пула ---------------------------------------------------------
+
+POOL_SCOPE = "full"
+MIN_CATALOG_PROGRAMS = 50
+CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "cache" / "polytech_robot_pool.json"
+CACHE_TTL_SEC = 7200
+MAX_WORKERS = 6
+# Доля упавших направлений, после которой сбой считается массовым/системным
+# (троттлинг, авария сайта, смена вёрстки), а не единичным сбоем одного
+# направления — при превышении _fetch_all бросает исключение, чтобы build()
+# откатился на устаревший кэш вместо сохранения почти пустого датасета.
+MAX_FAILED_FRACTION = 0.5
+
+_thread_local = threading.local()
+
+
+def _session() -> requests.Session:
+    """Thread-local Session: воркер переиспользует TCP+TLS-соединение вместо
+    нового рукопожатия на каждое из ~66 направлений (как в mpei_pool)."""
+    session = getattr(_thread_local, "polytech_session", None)
+    if session is None:
+        session = requests.Session()
+        _thread_local.polytech_session = session
+    return session
+
+
+def tracked_programs() -> list[ProgramConfig]:
+    return [p for p in load_programs() if p.university == "Московский политех" and p.parser == "mospolytech"]
+
+
+def _tracked_by_spec() -> dict[str, ProgramConfig]:
+    mapping: dict[str, ProgramConfig] = {}
+    for program in tracked_programs():
+        spec = program.parser_meta.get("specCode")
+        if spec:
+            mapping[spec] = program
+    return mapping
+
+
+class PolytechFullPool:
+    def build(self, *, use_cache: bool = True) -> tuple[list[RobotPerson], list[RobotProgram], str, bool]:
+        if use_cache:
+            cached = self._load_cache()
+            if cached is not None:
+                return cached
+        try:
+            catalog = fetch_catalog()
+            people, programs = self._fetch_all(catalog)
+            fetched_at = datetime.now(timezone.utc).isoformat()
+            self._save_cache(people, programs, fetched_at)
+            return people, programs, fetched_at, False
+        except Exception:
+            stale = self._load_cache(ignore_ttl=True)
+            if stale is not None:
+                return stale
+            raise
+
+    @staticmethod
+    def _fetch_one(spec: str) -> tuple[str, int, list[dict]]:
+        """(название по шапке, места общего конкурса, строки абитуриентов)."""
+        page_html = fetch_direction_html(spec, session=_session())
+        rows = _rows_from_html(page_html)
+        _code, title, places = _parse_header(rows)
+        return title, places, _parse_people(rows)
+
+    def _fetch_all(self, catalog: list[str]) -> tuple[list[RobotPerson], list[RobotProgram]]:
+        fetched: dict[str, tuple[str, int, list[dict]]] = {}
+        failed: list[str] = []
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {executor.submit(self._fetch_one, spec): spec for spec in catalog}
+            for future in as_completed(futures):
+                spec = futures[future]
+                try:
+                    fetched[spec] = future.result()
+                except Exception as exc:
+                    failed.append(spec)
+                    print(
+                        f"ВНИМАНИЕ: не удалось загрузить/разобрать направление Политеха "
+                        f"{spec!r} после исчерпания ретраев ({exc}) — направление попадёт "
+                        "в пул без мест и без абитуриентов (seat_source=None), конкурс по "
+                        "нему не будет учтён в этом цикле сборки.",
+                        file=sys.stderr,
+                    )
+
+        if catalog and len(failed) / len(catalog) > MAX_FAILED_FRACTION:
+            raise RuntimeError(
+                f"Массовый сбой загрузки направлений Политеха: не удалось обработать "
+                f"{len(failed)} из {len(catalog)} ({len(failed) / len(catalog):.0%}) — "
+                f"превышен порог {MAX_FAILED_FRACTION:.0%}, похоже на системный сбой "
+                "(троттлинг, авария сайта или смена вёрстки), а не единичный сбой одного "
+                "направления. Сборка пула прервана, чтобы не перезаписать кэш почти "
+                "пустым датасетом."
+            )
+
+        tracked = _tracked_by_spec()
+        catalog_set = set(catalog)
+        for spec, program in tracked.items():
+            if spec not in catalog_set:
+                print(
+                    f"ВНИМАНИЕ: отслеживаемое направление Политеха id={program.id} "
+                    f"(specCode={spec!r}) не найдено среди реальных направлений каталога "
+                    "сайта — оно не попадёт в пул, и приоритеты Димы на него тихо выпадут "
+                    "из симуляции (возможно, сайт переименовал или убрал эту строку).",
+                    file=sys.stderr,
+                )
+
+        programs: list[RobotProgram] = []
+        people: dict[str, RobotPerson] = {}
+        for spec in catalog:
+            program = tracked.get(spec)
+            key = str(program.id) if program else spec
+            item = fetched.get(spec)
+            if item is None:
+                programs.append(
+                    RobotProgram(
+                        key=key,
+                        title=spec,
+                        budget_places=None,
+                        tracked_id=program.id if program else None,
+                    )
+                )
+                continue
+
+            title, places, rows = item
+            programs.append(
+                RobotProgram(
+                    key=key,
+                    title=title,
+                    budget_places=places,
+                    tracked_id=program.id if program else None,
+                    seat_source="live",
+                    passing_cutoff=_passing_cutoff(rows),
+                    site_passing_count=_passing_count(rows),
+                )
+            )
+            for row in rows:
+                choice = ProgramChoice(program_key=key, priority=row["priority"])
+                person = people.get(row["code"])
+                if person is None:
+                    people[row["code"]] = RobotPerson(
+                        code=row["code"], score=row["score"], consent=row["consent"], choices=[choice]
+                    )
+                    continue
+                person.score = max(person.score, row["score"])
+                person.consent = person.consent or row["consent"]
+                person.choices.append(choice)
+        return list(people.values()), programs
+
+    def _load_cache(self, *, ignore_ttl: bool = False):
+        if not CACHE_PATH.exists():
+            return None
+        try:
+            payload = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+            fetched_at = payload.get("fetched_at", "")
+            fetched_dt = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+            age = (datetime.now(timezone.utc) - fetched_dt).total_seconds()
+            if not ignore_ttl and age > CACHE_TTL_SEC:
+                return None
+            people = [
+                RobotPerson(
+                    code=item["code"],
+                    score=int(item["score"]),
+                    consent=bool(item["consent"]),
+                    is_bvi=bool(item.get("is_bvi")),
+                    choices=[ProgramChoice(**choice) for choice in item.get("choices", [])],
+                )
+                for item in payload.get("people", [])
+            ]
+            programs = [RobotProgram(**item) for item in payload.get("programs", [])]
+            if payload.get("pool_scope") != POOL_SCOPE or len(programs) < MIN_CATALOG_PROGRAMS:
+                return None
+            return people, programs, fetched_at, True
+        except (ValueError, KeyError, json.JSONDecodeError, TypeError):
+            return None
+
+    def _save_cache(self, people: list[RobotPerson], programs: list[RobotProgram], fetched_at: str) -> None:
+        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "fetched_at": fetched_at,
+            "pool_scope": POOL_SCOPE,
+            "people": [
+                {
+                    "code": p.code,
+                    "score": p.score,
+                    "consent": p.consent,
+                    "is_bvi": p.is_bvi,
+                    "choices": [asdict(c) for c in p.choices],
+                }
+                for p in people
+            ],
+            "programs": [asdict(p) for p in programs],
+        }
+        CACHE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def fetch_polytech_full_pool(*, use_cache: bool = True) -> tuple[list[RobotPerson], list[RobotProgram], str, bool]:
+    return PolytechFullPool().build(use_cache=use_cache)
+
+
+def read_polytech_cached_pool() -> tuple[list[RobotPerson], list[RobotProgram], str, bool] | None:
+    """Отдаёт кэш Политеха ЛЮБОГО возраста и никогда не ходит в сеть. См. read_fa_cached_pool."""
+    return PolytechFullPool()._load_cache(ignore_ttl=True)
