@@ -39,6 +39,10 @@ def _command(text: str) -> str:
 
 
 def _welcome(chat_id: int) -> str:
+    # Список и число вузов — строго из SUPPORTED_UNIVERSITIES (как в
+    # _help_text() ниже), а не хардкодом: иначе при появлении нового вуза
+    # (только что так было с Политехом) это приветствие тихо начинает врать.
+    from src.robot.universities import SUPPORTED_UNIVERSITIES
     from src.telegram_users import get_user_code
 
     code = get_user_code(chat_id)
@@ -47,10 +51,11 @@ def _welcome(chat_id: int) -> str:
         if code
         else "Пришлите ваш уникальный код поступающего (только цифры), чтобы зарегистрироваться.\n\n"
     )
+    supported = ", ".join(sorted(SUPPORTED_UNIVERSITIES))
     return (
         header
         + "Команды:\n"
-        "/статус — ваш статус по 4 вузам (Финуниверситет, МИРЭА, МЭИ, СТАНКИН)\n"
+        f"/статус — ваш статус по {len(SUPPORTED_UNIVERSITIES)} вузам ({supported})\n"
         "/робот [вуз] — подробная симуляция зачисления по одному вузу\n"
         "/робот обновить [вуз] — обновить кэш списков робота\n"
         "/конкуренты [вуз] <код> — кто впереди вас по направлению (код см. в /робот)\n"
@@ -104,14 +109,19 @@ def _format_multi_status(code: str, results: list, *, stale: bool = False) -> st
             lines.append("⏳ Данные ещё собираются")
             continue
         if result.error:
-            # Пул прочитался успешно, просто этого человека в нём нет — он не
-            # подавал документы в этот вуз. Раньше это тонуло в агрегированной
-            # строке «код не найден среди N из M вузов»; теперь называем вуз
-            # поимённо, как и найденные.
-            ready_universities.append(university)
+            # "Не найден в списках вуза" — единственная распознанная ошибка,
+            # означающая факт про ЧЕЛОВЕКА (см. _resolve_dima_person в
+            # simulator.py: пул успешно прочитан, кода в нём просто нет).
+            # Любая другая ошибка на этой ветке (например, кэш повреждён) —
+            # сбой инфраструктуры, а не отсутствие человека в конкурсе;
+            # выдавать её за «вас там нет» нельзя, подписываем нейтрально.
             lines.append("")
             lines.append(f"— {university} —")
-            lines.append("Вы не участвуете в этом вузе")
+            if "не найден в списках" in result.error:
+                ready_universities.append(university)
+                lines.append("Вы не участвуете в этом вузе")
+            else:
+                lines.append("⏳ Не удалось проверить, попробуйте позже")
             continue
         found_any = True
         ready_universities.append(university)
@@ -124,19 +134,18 @@ def _format_multi_status(code: str, results: list, *, stale: bool = False) -> st
             lines.append(f"✅ Зачислитесь: {result.dima_placed_title}")
             lines.append(f"{result.dima_priority_used}-й приоритет · {via} · балл {result.dima_score}")
     if not found_any:
-        lines.append("")
+        # Поимённые строки выше (найдено/не участвуете/собирается/не удалось
+        # проверить) уже назвали каждый вуз — здесь только то, чего в них нет:
+        # либо совет попробовать другой код, либо, если по циклу не напечатано
+        # вообще ни одной строки (все вузы — config_error), единственное
+        # сообщение о состоянии. Раньше здесь же второй раз перечислялись те
+        # же вузы («Код не найден среди N из M...») — дубль факта, который
+        # правили по ре-ревью (Important 1).
         if ready_universities:
-            total = len(results)
-            names = ", ".join(sorted(ready_universities))
-            if len(ready_universities) == total:
-                lines.append(f"Код не найден ни в одном из {total} вузов ({names}).")
-            else:
-                lines.append(
-                    f"Код не найден среди {len(ready_universities)} из {total} вузов, "
-                    f"чьи данные уже готовы ({names})."
-                )
+            lines.append("")
             lines.append("Проверьте код через /код <номер>, либо вы подавали в другой вуз.")
-        else:
+        elif len(lines) == 1:
+            lines.append("")
             lines.append("⏳ Данные ещё собираются после перезапуска — вернитесь через пару минут.")
     if stale and ready_universities:
         from src.robot.universities import (
