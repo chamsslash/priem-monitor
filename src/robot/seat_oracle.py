@@ -357,6 +357,12 @@ _AUDITORS = {
     "Финансовый университет": audit_fa,
 }
 
+# Публичный список вузов с независимым оракулом мест — по нему check_seats.py
+# отличает «оракула нет по замыслу» (Политех: числа берутся живьём с того же
+# fio_list_curl.php, который использует и робот, независимого источника для
+# сверки не существует) от «оракул сломался» на вузе, где он должен быть.
+AUDITED_UNIVERSITIES = frozenset(_AUDITORS)
+
 
 def audit_university(university: str, programs: list[RobotProgram]) -> list[SeatAudit]:
     auditor = _AUDITORS.get(university)

@@ -6,13 +6,16 @@
 1. **Места** (`src/robot/seat_oracle.py`) — число мест, которое взял робот, и
    захардкоженный локальный резерв против официального числа с сайта. Ловит ту
    боль, из-за которой места дважды протухали: резерв разъезжается с сайтом
-   молча, и робот уверенно считает по устаревшему числу.
+   молча, и робот уверенно считает по устаревшему числу. Работает для МЭИ,
+   СТАНКИН, МИРЭА и ФА; у Политеха независимого оракула мест нет по замыслу —
+   робот и берёт, и мог бы сверять только с одной и той же страницей.
 2. **Платные места** — в пуле не должно быть ни одного платного конкурса:
    конкурент, «зачисленный» на платное место, исчезает из борьбы за бюджет, и
    робот видит свободный бюджет там, где его нет.
 3. **Прогноз** — куда робот селит пользователя против вердикта самого сайта
    (проходной балл среди согласных). Работает там, где вердикт сайта о людях не
-   участвует во входе каскада: МЭИ, СТАНКИН, МИРЭА. У ФА оракула нет.
+   участвует во входе каскада — сейчас это все пять вузов (см.
+   `PLACEMENT_VERIFIED_UNIVERSITIES` в `verification.py`).
 4. **Проходные баллы** — порог робота против порога сайта по каждому
    направлению. Систематический сдвиг вниз означает, что каскад пускает на
    места тех, кто туда не проходит.
@@ -37,7 +40,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.robot.models import RobotProgram
-from src.robot.seat_oracle import SeatAudit, audit_university, check_no_paid_seats
+from src.robot.seat_oracle import AUDITED_UNIVERSITIES, SeatAudit, audit_university, check_no_paid_seats
 from src.robot.simulator import _passing_score_for_program, run_robot_simulation
 from src.robot.universities import (
     SUPPORTED_UNIVERSITIES,
@@ -272,14 +275,21 @@ def main() -> int:
             continue
         print(f"  пул от {fetched_at}")
 
-        try:
-            audits = audit_university(university, programs)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  оракул мест недоступен: {exc}")
-            problems += 1
+        if university not in AUDITED_UNIVERSITIES:
+            # Не поломка, а решение спеки: у Политеха нет независимого источника
+            # мест — робот и берёт, и мог бы сверять только с одной и той же
+            # страницей fio_list_curl.php, сверка была бы круговой. Это не
+            # проблема, поэтому в problems не идёт.
+            print(f"  {MARKS['no_oracle']} оракула мест для «{university}» нет по замыслу — сверять не с чем")
         else:
-            _print_seats(audits)
-            problems += sum(1 for audit in audits if audit.is_problem)
+            try:
+                audits = audit_university(university, programs)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  оракул мест недоступен: {exc}")
+                problems += 1
+            else:
+                _print_seats(audits)
+                problems += sum(1 for audit in audits if audit.is_problem)
 
         _print_transfers(programs)
         _print_cutoffs(university, programs)
