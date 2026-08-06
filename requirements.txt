@@ -1,5 +1,6 @@
 beautifulsoup4>=4.12
 lxml>=5.0
 requests>=2.31
+certifi>=2024.2.2  # прямой импорт в polytech_pool: свой CA-бандл для mospolytech.ru (см. _ca_bundle)
 pysocks>=1.7  # SOCKS5-прокси для МИРЭА (гео-блок с зарубежного хостинга, см. mirea_pool)
 pdfplumber>=0.11  # разбор PDF-приказа о КЦП Финуниверситета (fa_pool)
