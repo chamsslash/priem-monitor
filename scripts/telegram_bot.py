@@ -58,7 +58,7 @@ def _welcome(chat_id: int) -> str:
         f"/статус — ваш статус по {len(SUPPORTED_UNIVERSITIES)} вузам ({supported})\n"
         "/робот [вуз] — подробная симуляция зачисления по одному вузу\n"
         "/робот обновить [вуз] — обновить кэш списков робота\n"
-        "/конкуренты [вуз] <код> — кто впереди вас по направлению (код см. в /робот)\n"
+        "/конкуренты [вуз] <номер приоритета> — кто впереди вас по направлению (номер см. в /робот)\n"
         "/приоритет [вуз] — свой порядок приоритетов (по умолчанию — как подано на сайте вуза)\n"
         "/код <номер> — перерегистрироваться другим кодом\n"
         "/help — справка"
@@ -75,7 +75,7 @@ def _help_text() -> str:
         "/статус — общая сводка и меню выбора вуза\n"
         f"/робот [{supported}] — симуляция робота зачисления\n"
         f"/робот обновить [{supported}] — обновить кэш списков робота (сейчас: {ready})\n"
-        f"/конкуренты [{supported}] <код> — кто впереди вас по направлению (код см. в /робот)\n"
+        f"/конкуренты [{supported}] <номер приоритета> — кто впереди вас по направлению (номер см. в /робот)\n"
         f"/приоритет [{supported}] — текущие приоритеты и настройка кнопками\n"
         "/help — эта справка"
     )
@@ -634,7 +634,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 send_message(
                     config.bot_token,
                     chat_id,
-                    "Использование: /конкуренты <вуз> <код направления> (код виден в ответе /робот)",
+                    "Использование: /конкуренты <вуз> <номер приоритета> (номер виден в ответе /робот)",
                     reply_to=message_id,
                 )
                 return
@@ -656,11 +656,11 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 send_message(
                     config.bot_token,
                     chat_id,
-                    "Укажите код направления, например: /конкуренты МЭИ 22",
+                    "Укажите номер приоритета, например: /конкуренты МЭИ 3",
                     reply_to=message_id,
                 )
                 return
-            tracked_id = int(rest[0])
+            priority_number = int(rest[0])
 
             from src.telegram_users import build_robot_settings, get_user_code, robot_config_path
 
@@ -672,7 +672,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             settings = build_robot_settings(code, university)
             priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
             result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
-            send_long_message(config.bot_token, chat_id, format_competitors(result, tracked_id), reply_to=message_id)
+            send_long_message(config.bot_token, chat_id, format_competitors(result, priority_number), reply_to=message_id)
             # См. аналогичный комментарий в /робот выше: config_error не
             # должен заказывать сетевую пересборку.
             if not result.config_error and is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):

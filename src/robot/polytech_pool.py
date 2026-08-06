@@ -527,12 +527,12 @@ class PolytechFullPool:
             raise
 
     @staticmethod
-    def _fetch_one(spec: str) -> tuple[str, int, list[dict]]:
-        """(название по шапке, места общего конкурса, строки абитуриентов)."""
+    def _fetch_one(spec: str) -> tuple[str, str, int, list[dict]]:
+        """(код ОКСО по шапке, название по шапке, места общего конкурса, строки абитуриентов)."""
         page_html = fetch_direction_html(spec, session=_session())
         rows = _rows_from_html(page_html)
         try:
-            _code, title, places = _parse_header(rows)
+            code, title, places = _parse_header(rows)
         except EmptyDirection:
             # Второй, независимый признак того же явления: таблица абитуриентов
             # тоже пуста. Если он не подтвердился — перед нами не пустое
@@ -546,10 +546,10 @@ class PolytechFullPool:
                     "похоже на сбой разбора"
                 ) from None
             raise
-        return title, places, _parse_people(rows)
+        return code, title, places, _parse_people(rows)
 
     def _fetch_all(self, catalog: list[str]) -> tuple[list[RobotPerson], list[RobotProgram]]:
-        fetched: dict[str, tuple[str, int, list[dict]]] = {}
+        fetched: dict[str, tuple[str, str, int, list[dict]]] = {}
         failed: list[str] = []
         empty: list[str] = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -621,13 +621,14 @@ class PolytechFullPool:
                 )
                 continue
 
-            title, places, rows = item
+            code, title, places, rows = item
             programs.append(
                 RobotProgram(
                     key=key,
                     title=title,
                     budget_places=places,
                     tracked_id=program.id if program else None,
+                    okso_code=code,
                     seat_source="live",
                     passing_cutoff=_passing_cutoff(rows),
                     site_passing_count=_passing_count(rows),

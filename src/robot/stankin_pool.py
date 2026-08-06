@@ -526,6 +526,10 @@ class StankinFullPool:
                     title=direction,
                     budget_places=places,
                     tracked_id=tracked_id,
+                    # У СТАНКИНа код ОКСО — первый токен строки каталога (уже
+                    # используется для nap-страницы через _direction_code), доставать
+                    # заново незачем.
+                    okso_code=_direction_code(direction),
                     seat_source=seat_source,
                     passing_cutoff=_passing_cutoff(rows_by_direction.get(direction, [])),
                     site_passing_count=_passing_count(rows_by_direction.get(direction, [])),

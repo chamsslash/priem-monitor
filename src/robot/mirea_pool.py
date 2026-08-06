@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
@@ -46,6 +47,18 @@ RETRYABLE_STATUS = {500, 502, 503, 504}
 
 def _program_title(program: ProgramConfig) -> str:
     return program.program.replace("\n", " / ").strip() or program.competition_group.strip()
+
+
+# У МИРЭА programSubjectTitle из API УЖЕ приходит вида «01.03.04 Прикладная
+# математика» — код ОКСО стоит первым словом, дальше идёт название направления.
+# Тот же subject кладётся в скобки display-названия (см. _catalog_from_api), так
+# что код можно достать напрямую из subject, не разбирая уже склеенную строку.
+_OKSO_CODE_RE = re.compile(r"^(\d{2}\.\d{2}\.\d{2})\b")
+
+
+def _okso_code(subject: str) -> str | None:
+    match = _OKSO_CODE_RE.match(subject.strip())
+    return match.group(1) if match else None
 
 
 # У МИРЭА бюджетный и ПЛАТНЫЙ конкурсы подписаны ОДИНАКОВО — compType «общий
@@ -336,6 +349,7 @@ class MireaFullPool:
                     title=item.title,
                     budget_places=item.plan,
                     tracked_id=tracked.get(item.comp_id),
+                    okso_code=_okso_code(item.subject),
                     # Места приходят живьём из competitions_api (поле plan), а не из
                     # конфига-резерва: раньше штамп не ставился, и сверка ошибочно
                     # рапортовала «места из резерва» при живых и верных числах.

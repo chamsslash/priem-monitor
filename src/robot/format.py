@@ -3,22 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from ..config_loader import load_programs
-from .direction_keys import okso_code_for_program
 from .models import (
     CompetitorBeforeDima,
     DimaPrioritySnapshot,
     RobotSimulationResult,
     VerificationReport,
 )
-
-
-def _okso_by_tracked_id() -> dict[int, str]:
-    return {
-        program.id: code
-        for program in load_programs()
-        if (code := okso_code_for_program(program)) is not None
-    }
 
 
 def _format_fetched_at(iso: str | None) -> str | None:
@@ -245,27 +235,30 @@ def format_robot_result(result: RobotSimulationResult) -> str:
             f"из них зачислено {result.dima_ahead_in_exam}):"
         )
         lines.append(f"Учитываются приоритеты ({len(result.dima_remaining_at_turn)}):")
-        okso_by_id = _okso_by_tracked_id()
         disagreements = 0
         ties = 0
-        for item in result.dima_remaining_at_turn:
+        # Номер здесь — не «сырой» приоритет с сайта (в нём после схлопывания
+        # дублей могут быть дыры), а порядковый номер В ЭТОМ СПИСКЕ. Он же —
+        # тот самый номер, который принимает /конкуренты (format_competitors
+        # ищет направление по позиции в result.user_programs, построенном
+        # той же сортировкой по приоритету, что и этот список).
+        for number, item in enumerate(result.dima_remaining_at_turn, start=1):
             if item.is_tie(result.dima_score):
                 ties += 1
-            okso = okso_by_id.get(item.tracked_id) if item.tracked_id is not None else None
-            prefix = f"{okso} " if okso else ""
-            suffix = f" (код {item.tracked_id})" if item.tracked_id is not None else ""
+            prefix = f"{item.okso_code} " if item.okso_code else ""
+            hint = f" (обратиться: /конкуренты {result.university} {number})"
             oracle = _format_oracle(item, result.dima_score)
             if item.agrees_with_site(result.dima_score) is False:
                 disagreements += 1
             if item.budget_places is None or item.remaining_at_turn is None:
-                lines.append(f"  {item.priority}. {prefix}{item.title}{suffix}: места: нет данных{oracle}")
+                lines.append(f"  {number}. {prefix}{item.title}: места: нет данных{oracle}{hint}")
                 continue
             status = "✅" if item.can_enter else "❌"
             taken = item.budget_places - item.remaining_at_turn
             lines.append(
-                f"  {item.priority}. {prefix}{item.title}{suffix}: "
+                f"  {number}. {prefix}{item.title}: "
                 f"осталось {item.remaining_at_turn}/{item.budget_places} "
-                f"(занято {taken}) {status}{oracle}"
+                f"(занято {taken}) {status}{oracle}{hint}"
             )
         if ties:
             lines.append(
@@ -297,33 +290,35 @@ def format_robot_result(result: RobotSimulationResult) -> str:
 
     if result.dima_competitors_by_program:
         lines.append("")
-        lines.append("Список тех, кто впереди вас по каждому приоритету: /конкуренты <вуз> <код>")
+        lines.append("Список тех, кто впереди вас по каждому приоритету: /конкуренты <вуз> <номер приоритета>")
 
     return "\n".join(lines)
 
 
-def format_competitors(result: RobotSimulationResult, tracked_id: int) -> str:
+def format_competitors(result: RobotSimulationResult, priority_number: int) -> str:
+    """priority_number — не tracked_id из конфига (направления теперь произвольные,
+    у части из них — а иногда и у всех, как в примере МИРЭА/1616947 — короткого id
+    просто нет), а позиция в result.user_programs: том же списке и в том же
+    порядке, что печатает format_robot_result в блоке «Учитываются приоритеты»."""
     if result.error:
         return _format_error_response(f"🤖 Конкуренты — {result.university}", result.error)
 
-    state = next((item for item in result.user_programs if item.tracked_id == tracked_id), None)
-    if state is None:
-        codes = [item.tracked_id for item in result.user_programs if item.tracked_id is not None]
-        # Направления теперь берутся из пула, а не только из конфига — у части
-        # (а иногда и у всех, как в примере МИРЭА/1616947) tracked_id может не
-        # быть вовсе, потому что короткого числового кода из config/programs.json
-        # для них просто нет. Пустой список кодов — это не «нет данных», это
-        # штатный случай, и молчать хвостом после «Доступные коды: » нельзя.
-        available = ", ".join(str(code) for code in codes) if codes else "нет — ни у одного вашего направления нет короткого кода из конфига"
-        return f"🤖 Конкуренты — {result.university}\n\nНет направления с кодом {tracked_id}. Доступные коды: {available}"
+    total = len(result.user_programs)
+    if priority_number < 1 or priority_number > total:
+        available = f"от 1 до {total}" if total else "нет — в вашем списке нет ни одного направления"
+        return (
+            f"🤖 Конкуренты — {result.university}\n\n"
+            f"Нет приоритета номер {priority_number}. Доступные номера: {available}"
+        )
 
+    state = result.user_programs[priority_number - 1]
     competitors = result.dima_competitors_by_program.get(state.program_key)
-    okso = _okso_by_tracked_id().get(tracked_id)
-    label = f"{okso} {state.title} (код {tracked_id})" if okso else f"{state.title} (код {tracked_id})"
+    okso = f"{state.okso_code} " if state.okso_code else ""
+    label = f"{okso}{state.title} (приоритет {priority_number})"
     if competitors is None:
         return (
             f"🤖 Конкуренты — {result.university}\n\n"
-            f"{label} не входит в ваши приоритеты — по нему нет данных о соперниках."
+            f"{label}: данных о соперниках нет."
         )
 
     lines = [f"🤖 Конкуренты на {label} до вашего хода:"]

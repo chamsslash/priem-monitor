@@ -50,6 +50,14 @@ class RobotProgram:
     title: str
     budget_places: int | None
     tracked_id: int | None = None
+    # Официальный код ОКСО, взятый ИЗ САМОГО ПУЛА (шапка/заголовок конкурсного
+    # списка вуза), а не из config/programs.json. Старый format._okso_by_tracked_id()
+    # строился по конфигу и знал код только для отслеживаемых направлений — теперь
+    # направления пользователя произвольные (из его реального конкурсного списка),
+    # и код нужен для КАЖДОГО из них, а не только сконфигурированных. None — вуз не
+    # публикует код в списке (ФА) либо разбор шапки не удался; коду вручную по
+    # похожести названия не подставляем — риск приписать чужой код выше пользы.
+    okso_code: str | None = None
     # Откуда взято budget_places (провенанс). Нужно, чтобы сверка мест
     # отличала живое число от аварийного резерва:
     #   "live"     — официальное число мест общего конкурса с сайта
@@ -101,6 +109,9 @@ class ProgramState:
     budget_places: int | None
     remaining: int | None
     tracked_id: int | None = None
+    # Прокинут из RobotProgram.okso_code — нужен format.py, чтобы печатать код
+    # ОКСО у произвольных (не только отслеживаемых) направлений пользователя.
+    okso_code: str | None = None
     bvi_enrolled: int = 0
     exam_enrolled: int = 0
     enrolled: list[str] = field(default_factory=list)
@@ -133,6 +144,9 @@ class DimaPrioritySnapshot:
     budget_places: int | None
     remaining_at_turn: int | None
     tracked_id: int | None = None
+    # Прокинут из ProgramState.okso_code — строка приоритета в format.py печатает
+    # его перед названием направления вместо старого поиска по конфигу.
+    okso_code: str | None = None
     # Ответ ОРАКУЛА по этому направлению: проходной балл среди согласных прямо с
     # сайта вуза. Робот его не использует в расчёте — он показывается рядом с
     # выводом робота, чтобы расхождение было видно сразу, а не пряталось.

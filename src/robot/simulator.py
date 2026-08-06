@@ -210,6 +210,7 @@ def _dima_remaining_snapshot(
                 budget_places=state.budget_places,
                 remaining_at_turn=state.remaining,
                 tracked_id=state.tracked_id,
+                okso_code=state.okso_code,
             )
         )
     return snapshots
@@ -279,6 +280,7 @@ def _simulate_two_phase(
             budget_places=program.budget_places,
             remaining=program.budget_places,
             tracked_id=program.tracked_id,
+            okso_code=program.okso_code,
         )
         for program in programs
     }

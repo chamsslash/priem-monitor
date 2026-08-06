@@ -167,6 +167,14 @@ _LIST_ID_NUMBER_RE = re.compile(r"entrants_list(\d+)\.html")
 
 KCP_URL = "https://pk.mpei.ru/info/speclist_simple.html"
 _OKSO_SUFFIX_RE = re.compile(r"\s*\(\d{2}\.\d{2}\.\d{2}\b.*\)\s*$")
+# Тот же хвост в скобках, что срезает _OKSO_SUFFIX_RE, но здесь нужен не остаток
+# без него, а сам код — первые 8 символов внутри скобок.
+_OKSO_CODE_RE = re.compile(r"\((\d{2}\.\d{2}\.\d{2})\b")
+
+
+def _okso_code(catalog_title: str) -> str | None:
+    match = _OKSO_CODE_RE.search(catalog_title)
+    return match.group(1) if match else None
 
 
 @dataclass
@@ -719,6 +727,7 @@ class MpeiFullPool:
                     title=title,
                     budget_places=places,
                     tracked_id=tracked_program.id if tracked_program else None,
+                    okso_code=_okso_code(title),
                     seat_source=seat_source,
                     passing_cutoff=cutoff_by_list.get(list_id),
                     vacant_places=vacant_by_list.get(list_id),

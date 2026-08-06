@@ -565,6 +565,10 @@ class FaFullPool:
                     title=title,
                     budget_places=seats,
                     tracked_id=tracked.get(title),
+                    # ФА официального кода ОКСО в списках/приказе не публикует.
+                    # okso_code остаётся None намеренно: подставлять его по похожести
+                    # названия конкурсной группы с другим вузом запрещено — риск
+                    # приписать чужой код выше пользы от «красивого» отображения.
                     seat_source=seat_source,
                     passing_cutoff=verdict[title][0] if title in verdict else None,
                     site_passing_count=verdict[title][1] if title in verdict else None,
