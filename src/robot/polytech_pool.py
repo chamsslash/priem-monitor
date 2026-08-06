@@ -286,6 +286,18 @@ def _rows_from_html(page_html: str) -> list[list[str]]:
     return rows
 
 
+class EmptyDirection(Exception):
+    """Направление без участников конкурса — не сбой разбора.
+
+    Сайт честно отдаёт пустую шапку (9 ячеек, но cells[0] и cells[1] пусты)
+    вместе с «УЧАСТВУЮЩИЕ В КОНКУРСЕ: 0» в тексте страницы: запрос удался с
+    первой попытки, вёрстка не менялась, просто на направление никто не подал
+    документы. Отличать от ValueError важно, чтобы не засорять `failed`:
+    14 из 66 направлений (август 2026) устойчиво пустые, и если считать их
+    сбоями, MAX_FAILED_FRACTION перестаёт измерять настоящие сбои разбора.
+    """
+
+
 def _parse_header(rows: list[list[str]]) -> tuple[str, str, int]:
     """Шапка направления: (код ОКСО, название, места общего конкурса).
 
@@ -294,9 +306,16 @@ def _parse_header(rows: list[list[str]]) -> tuple[str, str, int]:
     особую, отдельную) и завышает то, что реально разыгрывается в общем
     конкурсе, который симулирует робот.
     """
+    empty_header_seen = False
     for cells in rows:
-        if len(cells) == 9 and _HEADER_CODE_RE.match(cells[0]):
+        if len(cells) != 9:
+            continue
+        if _HEADER_CODE_RE.match(cells[0]):
             return cells[0], cells[1], int(cells[7])
+        if not cells[0].strip():
+            empty_header_seen = True
+    if empty_header_seen:
+        raise EmptyDirection("шапка направления пуста — участников конкурса нет")
     raise ValueError(
         "Не найдена строка шапки направления (9 ячеек, код вида XX.XX.XX) — "
         "сайт мог поменять вёрстку ответа fio_list_curl.php. Молча подставлять "
@@ -497,18 +516,39 @@ class PolytechFullPool:
         """(название по шапке, места общего конкурса, строки абитуриентов)."""
         page_html = fetch_direction_html(spec, session=_session())
         rows = _rows_from_html(page_html)
-        _code, title, places = _parse_header(rows)
+        try:
+            _code, title, places = _parse_header(rows)
+        except EmptyDirection:
+            # Второй, независимый признак того же явления: таблица абитуриентов
+            # тоже пуста. Если он не подтвердился — перед нами не пустое
+            # направление, а что-то незнакомое, и глотать его нельзя: пусть
+            # уйдёт в failed как настоящий ValueError.
+            people = _parse_people(rows)
+            if people:
+                raise ValueError(
+                    f"шапка направления {spec!r} пуста, но таблица абитуриентов "
+                    f"не пуста ({len(people)} строк) — это не пустое направление, "
+                    "похоже на сбой разбора"
+                ) from None
+            raise
         return title, places, _parse_people(rows)
 
     def _fetch_all(self, catalog: list[str]) -> tuple[list[RobotPerson], list[RobotProgram]]:
         fetched: dict[str, tuple[str, int, list[dict]]] = {}
         failed: list[str] = []
+        empty: list[str] = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {executor.submit(self._fetch_one, spec): spec for spec in catalog}
             for future in as_completed(futures):
                 spec = futures[future]
                 try:
                     fetched[spec] = future.result()
+                except EmptyDirection:
+                    # Не сбой: направление честно пустое. В `failed` не попадает,
+                    # чтобы не искажать MAX_FAILED_FRACTION и не пугать ложной
+                    # тревогой — итог для данных тот же (seat_source=None), как
+                    # у обычного failed-направления ниже по коду.
+                    empty.append(spec)
                 except Exception as exc:
                     failed.append(spec)
                     print(
@@ -518,6 +558,14 @@ class PolytechFullPool:
                         "нему не будет учтён в этом цикле сборки.",
                         file=sys.stderr,
                     )
+
+        if empty:
+            print(
+                f"{len(empty)} направлений Политеха без участников конкурса (сайт "
+                "честно отдаёт «УЧАСТВУЮЩИЕ В КОНКУРСЕ: 0») — не сбой, в пуле у них "
+                "seat_source=None: " + ", ".join(sorted(empty)),
+                file=sys.stderr,
+            )
 
         if catalog and len(failed) / len(catalog) > MAX_FAILED_FRACTION:
             raise RuntimeError(
