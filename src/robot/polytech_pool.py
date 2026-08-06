@@ -41,8 +41,19 @@ _INTERMEDIATE_CERT_PATH = (
     Path(__file__).resolve().parents[2] / "config" / "certs" / "globalsign-gcc-r3-dv-tls-ca-2020.pem"
 )
 
+# НЕ /tmp: он мир-доступен на запись и путь предсказуем, поэтому файл там был
+# бы удобной мишенью для подмены доверенного CA между записью и чтением
+# OpenSSL (тот самый MITM, из-за которого эта функция и отказалась от
+# verify=False). data/cache/ — наш каталог, gitignored, права процесса.
+_CA_BUNDLE_PATH = Path(__file__).resolve().parents[2] / "data" / "cache" / "polytech_ca_bundle.pem"
+
 # Кэш собранного бандла на весь процесс: пересобирать его на каждый запрос
-# незачем, сертификаты не меняются в рамках одного запуска.
+# незачем, сертификаты не меняются в рамках одного запуска. Лок — потому что
+# _fetch_all зовёт _request из MAX_WORKERS потоков параллельно; без него два
+# воркера могли бы одновременно писать и перезаписывать глобал (сейчас гонка
+# случайно снята тем, что build() зовёт fetch_catalog() до пула в главном
+# потоке, но это неявная зависимость, а не гарантия).
+_ca_bundle_lock = threading.Lock()
 _ca_bundle_path: str | None = None
 
 
@@ -56,15 +67,31 @@ def _ca_bundle() -> str:
     подменить его смог бы кто угодно в канале.
     """
     global _ca_bundle_path
-    if _ca_bundle_path is not None:
+    with _ca_bundle_lock:
+        if _ca_bundle_path is not None:
+            return _ca_bundle_path
+        _CA_BUNDLE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=_CA_BUNDLE_PATH.parent, prefix=".polytech_ca_bundle-", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "wb") as out:
+                out.write(Path(certifi.where()).read_bytes())
+                out.write(b"\n")
+                out.write(_INTERMEDIATE_CERT_PATH.read_bytes())
+            # os.replace — атомарная публикация на уровне ФС: читатель видит
+            # либо старое содержимое целиком, либо новое, никогда огрызок
+            # частичной записи, и подменить итоговый файл через симлинк между
+            # записью и чтением OpenSSL здесь нельзя.
+            os.replace(tmp_path, _CA_BUNDLE_PATH)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+        _ca_bundle_path = str(_CA_BUNDLE_PATH)
         return _ca_bundle_path
-    bundle_path = os.path.join(tempfile.gettempdir(), "polytech_ca_bundle.pem")
-    with open(bundle_path, "wb") as out:
-        out.write(Path(certifi.where()).read_bytes())
-        out.write(b"\n")
-        out.write(_INTERMEDIATE_CERT_PATH.read_bytes())
-    _ca_bundle_path = bundle_path
-    return bundle_path
 
 
 def _request(
