@@ -89,14 +89,29 @@ def _format_multi_status(code: str, results: list, *, stale: bool = False) -> st
     # утверждать «ни в одном из 4», когда реально прочитались только 2.
     ready_universities: list[str] = []
     for university, result in results:
+        if result.config_error:
+            # Вуз отключён/не поддержан/нет программ в config/robot.json —
+            # это настройка бота, а не факт про пользователя. Пул для него
+            # вообще не читался, поэтому не показываем вуз вовсе, а не
+            # притворяемся, что там «нет данных» или «человек не участвует».
+            continue
+        if result.error == POOL_NOT_READY_ERROR:
+            # Кэш ещё ни разу не собирался (например, первые минуты после
+            # рестарта) — называем вуз поимённо, а не молчим, но и не пишем
+            # «не участвуете»: мы просто ещё не смотрели.
+            lines.append("")
+            lines.append(f"— {university} —")
+            lines.append("⏳ Данные ещё собираются")
+            continue
         if result.error:
-            # config_error (вуз отключён/не поддержан/нет программ) — пул тоже
-            # не читался, как и при POOL_NOT_READY_ERROR, просто по другой
-            # причине. Ни тот, ни другой случай не должны попадать в «данные
-            # уже готовы» — иначе бот поимённо соврёт про вуз, чей пул вообще
-            # не открывался.
-            if result.error != POOL_NOT_READY_ERROR and not result.config_error:
-                ready_universities.append(university)
+            # Пул прочитался успешно, просто этого человека в нём нет — он не
+            # подавал документы в этот вуз. Раньше это тонуло в агрегированной
+            # строке «код не найден среди N из M вузов»; теперь называем вуз
+            # поимённо, как и найденные.
+            ready_universities.append(university)
+            lines.append("")
+            lines.append(f"— {university} —")
+            lines.append("Вы не участвуете в этом вузе")
             continue
         found_any = True
         ready_universities.append(university)
@@ -383,6 +398,34 @@ def _handle_callback(config, callback_query: dict) -> None:
     answer_callback_query(config.bot_token, callback_id)
 
 
+def _register_code_reply(chat_id: int, candidate: str) -> tuple[str, bool]:
+    """Проверяет код по кэшам всех вузов и либо сохраняет его, либо отказывает.
+
+    Отказ — ТОЛЬКО когда все готовые вузы честно прочитались (unchecked
+    пуст) и кода нет ни в одном из них. Если хоть один вуз не прочитался
+    (кэш ещё не прогрелся, например сразу после рестарта бота), сохраняем с
+    оговоркой: отказ по неполной информации запирал бы снаружи живого
+    пользователя только потому, что его вуз пока не успел прочитаться.
+    Возвращает (текст ответа, сохранён ли код).
+    """
+    from src.robot.code_lookup import find_code_presence
+    from src.telegram_users import set_user_code
+
+    presence = find_code_presence(candidate)
+    if not presence.is_valid and not presence.unchecked:
+        return f"Код {candidate} не найден ни в одном вузе. Проверьте номер и попробуйте снова.", False
+
+    set_user_code(chat_id, candidate)
+    lines = [f"Готово, код сохранён: {candidate}"]
+    if presence.found:
+        lines.append(f"Участвуете в конкурсе: {', '.join(sorted(presence.found))}.")
+    if presence.absent:
+        lines.append(f"Не участвуете: {', '.join(sorted(presence.absent))}.")
+    if presence.unchecked:
+        lines.append(f"Пока не смогли проверить (данные ещё собираются): {', '.join(sorted(presence.unchecked))}.")
+    return "\n".join(lines), True
+
+
 def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
     command = _command(text)
 
@@ -390,7 +433,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
         send_message(config.bot_token, chat_id, _welcome(chat_id) if command == "/start" else _help_text(), reply_to=message_id)
         return
 
-    from src.telegram_users import is_registered, looks_like_code, set_user_code
+    from src.telegram_users import is_registered, looks_like_code
 
     if command in {"/код", "/code"}:
         parts = text.strip().split(maxsplit=1)
@@ -398,19 +441,17 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
         if not looks_like_code(candidate):
             send_message(config.bot_token, chat_id, "Код должен состоять только из цифр (4–15 символов). Пример: /код 1824102", reply_to=message_id)
             return
-        set_user_code(chat_id, candidate)
-        send_message(config.bot_token, chat_id, f"Готово, код обновлён: {candidate}", reply_to=message_id)
+        reply, _saved = _register_code_reply(chat_id, candidate)
+        send_message(config.bot_token, chat_id, reply, reply_to=message_id)
         return
 
     if not is_registered(chat_id):
-        if not text.startswith("/") and looks_like_code(text.strip()):
-            set_user_code(chat_id, text.strip())
-            send_message(
-                config.bot_token,
-                chat_id,
-                f"Готово, код сохранён: {text.strip()}\nТеперь можно вызвать /статус.",
-                reply_to=message_id,
-            )
+        candidate = text.strip()
+        if not text.startswith("/") and looks_like_code(candidate):
+            reply, saved = _register_code_reply(chat_id, candidate)
+            if saved:
+                reply += "\nТеперь можно вызвать /статус."
+            send_message(config.bot_token, chat_id, reply, reply_to=message_id)
             return
         send_message(
             config.bot_token,
