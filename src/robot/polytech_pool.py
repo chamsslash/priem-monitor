@@ -306,7 +306,7 @@ def _exact_header_index(cells: list[str], name: str) -> int | None:
 _MAX_HEADER_CELLS = 100
 
 
-def _people_columns(rows: list[list[str]]) -> dict[str, int] | None:
+def _people_columns(rows: list[list[str]]) -> dict[str, int | None] | None:
     """Позиции нужных колонок в таблице абитуриентов по тексту заголовка.
 
     НЕ фиксированные номера: число колонок «Балл приоритет N» у списка
@@ -314,6 +314,16 @@ def _people_columns(rows: list[list[str]]) -> dict[str, int] | None:
     (архитектура/дизайн/графика) может быть больше, и тогда все индексы
     после них съезжают. Единственный устойчивый способ — искать колонки по
     названию в строке заголовка этой же таблицы, как в stankin_pool/mpei_pool.
+
+    «Высший проходной приоритет» (top) — ОРАКУЛ сайта, а не обязательный
+    столбец для сборки списка. Как у stankin_pool._rows_from_table: если его
+    нет, `top` = None, и `_parse_people` пометит top_passing=None у всех
+    строк — сверка проходного балла станет недоступна, но сами абитуриенты и
+    их места по-прежнему разберутся. Раньше top_idx был в общем гейте вместе
+    с обязательными колонками — тогда отсутствие только ЭТОЙ одной колонки
+    роняло всё направление (ValueError → в пуле остаётся seat_source=None
+    вместо уже успешно разобранного budget_places из шапки), хотя бриф прямо
+    требовал копировать поведение stankin, где отсутствие top допустимо.
     """
     for cells in rows:
         if len(cells) > _MAX_HEADER_CELLS:
@@ -324,15 +334,14 @@ def _people_columns(rows: list[list[str]]) -> dict[str, int] | None:
             continue
         consent_idx = _exact_header_index(cells, "согласие")
         priority_idx = _exact_header_index(cells, "приоритет")
-        top_idx = _exact_header_index(cells, "высший проходной приоритет")
-        if None in (consent_idx, priority_idx, top_idx):
+        if consent_idx is None or priority_idx is None:
             continue
         return {
             "code": code_idx,
             "score": score_idx,
             "consent": consent_idx,
             "priority": priority_idx,
-            "top": top_idx,
+            "top": _exact_header_index(cells, "высший проходной приоритет"),
         }
     return None
 
@@ -344,10 +353,13 @@ def _parse_people(rows: list[list[str]]) -> list[dict]:
     if columns is None:
         raise ValueError(
             "Не найдена таблица абитуриентов Политеха (нет колонок «Уникальный "
-            "код»/«Конкурсный балл»/«Согласие»/«Приоритет»/«Высший проходной "
-            "приоритет») — сайт мог поменять вёрстку ответа fio_list_curl.php."
+            "код»/«Конкурсный балл»/«Согласие»/«Приоритет») — сайт мог поменять "
+            "вёрстку ответа fio_list_curl.php."
         )
-    last_idx = max(columns.values())
+    top_col = columns["top"]
+    # last_idx — по ОБЯЗАТЕЛЬНЫМ колонкам: top может отсутствовать вовсе, и
+    # тогда его не должно быть в границе длины строки.
+    last_idx = max(v for k, v in columns.items() if k != "top")
 
     result: list[dict] = []
     for cells in rows:
@@ -360,16 +372,22 @@ def _parse_people(rows: list[list[str]]) -> list[dict]:
         if not code:
             continue
         priority_cell = cells[columns["priority"]].strip()
-        top_passing_cell = cells[columns["top"]].strip()
+        if top_col is not None and top_col < len(cells):
+            top_passing_cell = cells[top_col].strip()
+            # «Проходит сюда»: высший проходной приоритет непуст и равен
+            # заявленному приоритету абитуриента на это направление.
+            top_passing: bool | None = bool(top_passing_cell) and top_passing_cell == priority_cell
+        else:
+            # Колонки «Высший проходной приоритет» нет вовсе — оракула сайта
+            # для этого направления нет, а не «никто не проходит».
+            top_passing = None
         result.append(
             {
                 "code": code,
                 "score": score,
                 "consent": normalize_yes(cells[columns["consent"]]),
                 "priority": to_int(priority_cell) or 99,
-                # «Проходит сюда»: высший проходной приоритет непуст и равен
-                # заявленному приоритету абитуриента на это направление.
-                "top_passing": bool(top_passing_cell) and top_passing_cell == priority_cell,
+                "top_passing": top_passing,
             }
         )
     return result
