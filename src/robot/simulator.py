@@ -30,31 +30,6 @@ def _find_dima_in_pool(people: list[RobotPerson], list_code: str) -> RobotPerson
     return None
 
 
-def _filter_choices_to_tracked(
-    dima: RobotPerson,
-    tracked_programs: list[ProgramConfig],
-    *,
-    consent: bool,
-) -> RobotPerson:
-    tracked_keys = {direction_key_for_program(program) for program in tracked_programs}
-    choices = [choice for choice in dima.choices if choice.program_key in tracked_keys]
-    if not choices:
-        return RobotPerson(
-            code=dima.code,
-            score=dima.score,
-            consent=consent,
-            is_bvi=dima.is_bvi,
-            choices=dima.choices,
-        )
-    return RobotPerson(
-        code=dima.code,
-        score=dima.score,
-        consent=consent,
-        is_bvi=dima.is_bvi,
-        choices=choices,
-    )
-
-
 def _build_dima_person(
     settings: RobotSettings,
     university_cfg: dict,
@@ -142,16 +117,34 @@ def _resolve_dima_person(
         found = _find_dima_in_pool(people, str(list_code))
         if found is None:
             raise ValueError(f"Дима ({list_code}) не найден в списках вуза")
-        dima = _filter_choices_to_tracked(found, tracked_programs, consent=settings.dima_consent)
+        # Раньше здесь выборы урезались до config/programs.json
+        # (_filter_choices_to_tracked). Теперь показываем специальности как они
+        # есть в конкурсном списке — конфиг больше не сужает набор направлений,
+        # только опционально переупорядочивает его ниже. consent берём из
+        # настроек, а не из пула — это уже существующее поведение симулятора
+        # (см. комментарий в telegram_users.build_robot_settings), а не новое.
+        dima = RobotPerson(
+            code=found.code,
+            score=found.score,
+            consent=settings.dima_consent,
+            is_bvi=found.is_bvi,
+            choices=found.choices,
+        )
         saved_ids = priority_ids
         if saved_ids is None:
             saved_ids = [int(item) for item in university_cfg.get("dima_priorities", [])]
         if saved_ids:
-            # require_in_pool=False: заявка Димы на направление реальна и известна из
-            # конфига независимо от того, попала ли его строка в пул конкурентов — если
-            # её исключили как «Зачисляется в другой КГ» (он уже проходит выше), это не
-            # значит, что он сюда не подавал, и это направление всё равно нужно показать.
-            dima = _apply_priority_order(dima, tracked_programs, saved_ids, require_in_pool=False)
+            # require_in_pool=True: сохранённый порядок может только
+            # ПЕРЕУПОРЯДОЧИТЬ реальные выборы Димы, а не дописать направление,
+            # куда он не подавал. Флаг стоял False намеренно — ради человека,
+            # вычеркнутого пометкой «Зачисляется в другой КГ» (enrolls_elsewhere),
+            # его тоже нужно показывать. Это по-прежнему так и при True: такие
+            # выборы остаются в dima.choices, а pool_keys внутри
+            # _apply_priority_order строится по choices целиком, а не по
+            # урезанному ordered_program_keys() — из каскада их убирает
+            # отдельный флаг enrolls_elsewhere, а не этот. Проверено живьём на
+            # реальном коде МИРЭА с сохранённым переупорядочиванием.
+            dima = _apply_priority_order(dima, tracked_programs, saved_ids, require_in_pool=True)
         return dima, True
     return _build_dima_person(settings, university_cfg, tracked_programs, priority_ids=priority_ids), False
 
@@ -362,10 +355,21 @@ def _simulate_two_phase(
             dima_ahead_in_exam += 1
 
     dima_title = states[dima_program_key].title if dima_program_key else None
-    tracked_states = sorted(
-        [state for state in states.values() if state.tracked_id is not None],
-        key=lambda item: item.tracked_id or 0,
-    )
+    # Раньше сюда попадали только программы из конфига (tracked_id is not
+    # None) — набор направлений был захардкожен. Теперь «мои направления» —
+    # это РЕАЛЬНЫЕ выборы Димы из конкурсного списка, в порядке поданных
+    # приоритетов (дубли по ключу схлопываются, как и в _dima_remaining_snapshot).
+    # Берём из dima.choices целиком, а не из ordered_program_keys(): направление
+    # с enrolls_elsewhere тоже должно остаться видимым, каскад его просто не
+    # пытается занять.
+    user_program_keys: list[str] = []
+    seen_user_keys: set[str] = set()
+    for choice in sorted(dima.choices, key=lambda item: item.priority):
+        if choice.program_key in seen_user_keys:
+            continue
+        seen_user_keys.add(choice.program_key)
+        user_program_keys.append(choice.program_key)
+    user_states = [states[key] for key in user_program_keys if key in states]
     if dima_in_pool:
         queue_size = len(participants)
         exam_people_count = len(exam_candidates)
@@ -391,7 +395,7 @@ def _simulate_two_phase(
         dima_placed_via=dima_placed_via,
         dima_competitors_by_program=dima_competitors_by_program,
         programs=sorted(states.values(), key=lambda item: item.title),
-        tracked_programs=tracked_states,
+        user_programs=user_states,
         require_consent=require_consent,
         from_cache=from_cache,
         fetched_at=fetched_at,
@@ -520,7 +524,7 @@ def run_robot_simulation(
         dima_priority_used=None,
         dima_placed_via=None,
         programs=[],
-        tracked_programs=[],
+        user_programs=[],
         require_consent=settings.require_consent,
         from_cache=False,
     )
@@ -603,17 +607,13 @@ def run_robot_simulation(
         from_cache=from_cache,
         fetched_at=fetched_at,
     )
-    result.tracked_programs = [
-        state
-        for state in result.tracked_programs
-        if state.tracked_id is not None
-        and any(
-            direction_key_for_program(program) == state.program_key
-            for program in tracked_for_report
-        )
-    ]
+    # `_simulate_two_phase` уже построил user_programs по реальным выборам
+    # Димы — раньше здесь было ещё одно урезание до конфига (совпадавшее по
+    # смыслу с удалённым _filter_choices_to_tracked), теперь оно не нужно:
+    # направления, которых нет в конфиге, просто не получат display_titles
+    # ниже и останутся с «сырым» названием из пула.
     display_titles = {direction_key_for_program(program): program_display_name(program) for program in tracked_for_report}
-    for state in result.tracked_programs:
+    for state in result.user_programs:
         if state.program_key in display_titles:
             state.title = display_titles[state.program_key]
     for snapshot in result.dima_remaining_at_turn:

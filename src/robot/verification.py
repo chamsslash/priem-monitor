@@ -85,7 +85,9 @@ def _build_seat_checks(
 ) -> list[SeatCheck]:
     by_key = {program.key: program for program in programs}
     checks: list[SeatCheck] = []
-    for state in result.tracked_programs:
+    # user_programs — реальные выборы человека из конкурсного списка, а не
+    # захардкоженное подмножество конфига (см. models.RobotSimulationResult).
+    for state in result.user_programs:
         program = by_key.get(state.program_key)
         checks.append(
             SeatCheck(
@@ -124,9 +126,25 @@ def _build_placement_check(
         return None
     robot_key = result.dima_placed_program_key
     robot_title = result.dima_placed_title or _title_for_key(programs, robot_key)
+    cutoff_by_key = {program.key: program.passing_cutoff for program in programs}
 
     # Нет ни одного проходного балла (колонки не было) — сверять не с чем.
-    if all(program.passing_cutoff is None for program in programs):
+    if all(cutoff is None for cutoff in cutoff_by_key.values()):
+        return PlacementCheck(
+            status="unavailable",
+            robot_key=robot_key,
+            robot_title=robot_title,
+            site_key=None,
+            site_title=None,
+        )
+
+    # Направления теперь берутся из живого пула, а не только из конфига, и
+    # часть из них в принципе без оракула (например, 5 филиальных программ ФА
+    # без колонки «Высший проходной приоритет» — см. PLACEMENT_VERIFIED_UNIVERSITIES
+    # выше), хотя у остальных направлений вуза проходные баллы есть. Без этой
+    # проверки такое направление читалось бы как "mismatch" (робот селит сюда,
+    # у сайта порог известен где-то ещё), хотя сверять именно тут просто нечем.
+    if robot_key is not None and cutoff_by_key.get(robot_key) is None:
         return PlacementCheck(
             status="unavailable",
             robot_key=robot_key,
@@ -145,7 +163,6 @@ def _build_placement_check(
         # нет). Оракул с его «балл >= порога» на этой границе всегда оптимистичен,
         # а каскад — как повезёт с порядком. Спорить тут не о чем: помечаем
         # отдельно, чтобы не считать это ошибкой модели и не прятать факт.
-        cutoff_by_key = {program.key: program.passing_cutoff for program in programs}
         at_boundary = site_key is not None and cutoff_by_key.get(site_key) == result.dima_score
         status = "boundary" if at_boundary else "mismatch"
     return PlacementCheck(

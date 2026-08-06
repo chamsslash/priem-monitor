@@ -306,9 +306,11 @@ def format_competitors(result: RobotSimulationResult, tracked_id: int) -> str:
     if result.error:
         return _format_error_response(f"🤖 Конкуренты — {result.university}", result.error)
 
-    state = next((item for item in result.tracked_programs if item.tracked_id == tracked_id), None)
+    state = next((item for item in result.user_programs if item.tracked_id == tracked_id), None)
     if state is None:
-        available = ", ".join(str(item.tracked_id) for item in result.tracked_programs)
+        available = ", ".join(
+            str(item.tracked_id) for item in result.user_programs if item.tracked_id is not None
+        )
         return f"🤖 Конкуренты — {result.university}\n\nНет направления с кодом {tracked_id}. Доступные коды: {available}"
 
     competitors = result.dima_competitors_by_program.get(state.program_key)

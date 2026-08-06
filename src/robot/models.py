@@ -292,7 +292,12 @@ class RobotSimulationResult:
     dima_priority_used: int | None
     dima_placed_via: str | None
     programs: list[ProgramState]
-    tracked_programs: list[ProgramState]
+    # Направления, на которые реально подавал этот человек (по данным конкурсного
+    # списка) — а НЕ подмножество захардкоженного config/programs.json, как было
+    # раньше (`tracked_programs`). tracked_id внутри ProgramState может быть None:
+    # направление всё равно показывается, просто у него нет короткого числового
+    # кода из конфига для команд вроде /конкуренты.
+    user_programs: list[ProgramState]
     require_consent: bool
     dima_competitors_by_program: dict[str, list[CompetitorBeforeDima]] = field(default_factory=dict)
     from_cache: bool = False
