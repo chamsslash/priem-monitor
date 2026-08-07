@@ -8,8 +8,17 @@ DEFAULT_UNIVERSITY = "МИРЭА"
 DEFAULT_PARSER = "mirea"
 TELEGRAM_BUTTON_LIMIT = 64
 
-# (chat_id, university) -> draft priority order during inline editing
-_priority_sessions: dict[tuple[int, str], list[str]] = {}
+# (chat_id, university) -> (draft priority_keys, ЗАМОРОЖЕННЫЙ на момент начала
+# сессии редактирования список направлений). options фиксируются здесь же —
+# не только priority_keys: callback_data кнопок кодирует ПОЗИЦИЮ в options
+# (см. build_priority_keyboard), а RefreshWorker пересобирает пул кэша каждые
+# несколько минут в фоне. Без заморозки два нажатия в одной открытой сессии
+# редактирования могли бы увидеть РАЗНЫЙ options (сайт вуза не гарантирует
+# неизменный порядок конкурсного списка между пересборками) — тогда индекс из
+# старой клавиатуры резолвился бы в другое направление, чем то, что человек
+# видел на экране, и нажатие тихо переставляло бы не то. Замороженный список
+# живёт до explicit save/cancel (clear_priority_session).
+_priority_sessions: dict[tuple[int, str], tuple[list[str], list[UserProgramOption]]] = {}
 
 
 @dataclass
@@ -58,6 +67,25 @@ def load_priority_editor(
     if parser is None:
         parser = SUPPORTED_UNIVERSITIES.get(university, DEFAULT_PARSER)
 
+    session_key = _session_key(chat_id, university)
+    session = _priority_sessions.get(session_key)
+    if session is not None:
+        # Сессия редактирования уже открыта — отдаём ЗАМОРОЖЕННЫЙ на её
+        # начало options, а не свежий пересчёт из пула. build_priority_keyboard
+        # кодирует в callback_data ПОЗИЦИЮ в options; если между двумя
+        # нажатиями в одной сессии RefreshWorker пересоберёт кэш этого вуза
+        # (циклы идут минутами, пользователь вполне может столько сидеть с
+        # открытой клавиатурой) и порядок конкурсного списка на сайте
+        # изменится, свежий пересчёт молча подсунул бы под старый индекс
+        # ДРУГОЕ направление — нажатие переставило бы не то, что человек видел.
+        priority_keys, options = session
+        return PriorityEditorState(
+            university=university,
+            parser=parser,
+            priority_keys=list(priority_keys),
+            options=list(options),
+        )
+
     options: list[UserProgramOption] = []
     code = get_user_code(chat_id)
     if code:
@@ -89,8 +117,7 @@ def load_priority_editor(
     # int никогда не равен str, даже при совпадающих цифрах) просто не
     # попадёт в available и молча отсеется здесь.
     available = {option.key for option in options}
-    session_key = _session_key(chat_id, university)
-    priority_keys = _priority_sessions.get(session_key) or [item for item in saved if item in available]
+    priority_keys = [item for item in saved if item in available]
     return PriorityEditorState(
         university=university,
         parser=parser,
@@ -100,7 +127,15 @@ def load_priority_editor(
 
 
 def save_priority_editor(chat_id: int, state: PriorityEditorState) -> None:
-    _priority_sessions[_session_key(chat_id, state.university)] = list(state.priority_keys)
+    # Замораживает options ВМЕСТЕ с priority_keys — см. комментарий у
+    # _priority_sessions. Вызывается и на старте сессии (первая заморозка), и
+    # после каждого tog/up/dn (persist черновика) — во втором случае state.options
+    # уже сам пришёл из замороженной сессии (load_priority_editor вернул её),
+    # так что здесь просто перекладывается тот же список, а не пересчитывается.
+    _priority_sessions[_session_key(chat_id, state.university)] = (
+        list(state.priority_keys),
+        list(state.options),
+    )
 
 
 def clear_priority_session(chat_id: int, university: str) -> None:

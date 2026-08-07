@@ -125,10 +125,8 @@ def _resolve_dima_person(
     # зарегистрированный пользователь) это ключи RobotProgram.key — см.
     # _apply_priority_order ниже; без dima_list_code (легаси-сценарий
     # config/robot.json без кода, только _build_dima_person) это по-прежнему
-    # числовые id config/programs.json. Список остаётся list без строгой
-    # типизации элементов намеренно — вводить Union ради одного легаси-пути
-    # не стоит.
-    priority_ids: list | None = None,
+    # числовые id config/programs.json.
+    priority_ids: list[int] | list[str] | None = None,
 ) -> tuple[RobotPerson, bool]:
     list_code = university_cfg.get("dima_list_code")
     if list_code:
@@ -533,7 +531,7 @@ def run_robot_simulation(
     # продуктовый путь — см. _resolve_dima_person); числовые id
     # config/programs.json остаются только в легаси-сценарии без
     # dima_list_code. См. комментарий у priority_ids в _resolve_dima_person.
-    priority_ids: list | None = None,
+    priority_ids: list[int] | list[str] | None = None,
 ) -> RobotSimulationResult:
     """stale_ok=True — брать пул ТОЛЬКО из кэша, любого возраста, и никогда не
     ходить в сеть. Режим для обработчиков команд Telegram: они крутятся в том же

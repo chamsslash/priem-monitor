@@ -45,13 +45,18 @@ def list_university_programs(university: str, parser: str) -> list[ProgramOption
 
 
 def parse_priority_ids(raw: str, available_ids: set[int]) -> list[int]:
+    """Общий парсер набора чисел через пробел/запятую с проверкой на
+    available_ids. Смысл чисел зависит от caller'а: program_id из
+    config/programs.json в robot.py (CLI), но НОМЕР ПОЗИЦИИ в реальном списке
+    направлений в telegram_priorities.try_parse_priority_command — отсюда
+    нейтральная формулировка ошибки, не привязанная к одному из двух смыслов."""
     ids: list[int] = []
     for chunk in re.split(r"[\s,;]+", raw.strip()):
         if not chunk:
             continue
         program_id = int(chunk)
         if program_id not in available_ids:
-            raise ValueError(f"Неизвестный program_id: {program_id}")
+            raise ValueError(f"Неизвестное значение: {program_id}")
         if program_id not in ids:
             ids.append(program_id)
     if not ids:
