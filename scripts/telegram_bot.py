@@ -693,6 +693,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             from src.robot.priorities import save_priority_keys
             from src.robot.telegram_priorities import (
                 PriorityEditorState,
+                clear_priority_session,
                 format_saved_confirmation,
                 load_priority_editor,
                 try_parse_priority_command,
@@ -721,6 +722,14 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 parsed_university, priority_keys = parsed
                 if priority_keys:
                     save_priority_keys(parsed_university, priority_keys, path=robot_config_path(chat_id))
+                    # Без сброса: если у пользователя открыт редактор (кнопки
+                    # /приоритет), следующий клик по tog/up/dn/save грузит
+                    # ЗАМОРОЖЕННЫЙ на момент открытия черновик — из-за него
+                    # клик перезаписал бы только что сохранённый здесь
+                    # результат старым draft'ом. Ручное сохранение должно
+                    # закрывать открытую сессию редактора, как и клавиатурные
+                    # save/cancel (см. _handle_priority_callback).
+                    clear_priority_session(chat_id, parsed_university)
                     state = load_priority_editor(chat_id, university=parsed_university)
                     saved_state = PriorityEditorState(
                         university=parsed_university,
