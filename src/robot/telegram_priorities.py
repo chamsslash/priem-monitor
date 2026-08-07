@@ -38,6 +38,17 @@ class PriorityEditorState:
     parser: str = DEFAULT_PARSER
     priority_keys: list[str] = field(default_factory=list)
     options: list[UserProgramOption] = field(default_factory=list)
+    # Почему options пуст — три РАЗНЫХ штатных состояния, которые раньше
+    # схлопывались в одно сообщение «Нет отслеживаемых программ» (которое ещё
+    # и ссылалось на понятие «отслеживаемые», которого после этой ветки уже
+    # нет). None, если options непустой и причина не нужна.
+    #   "no_code"        — человек ещё не прислал код поступающего
+    #   "pool_not_ready"  — пул этого вуза ещё не собрался (первые минуты
+    #                       после рестарта бота), попробовать позже
+    #   "not_in_list"     — код есть, пул есть, но в списках ИМЕННО этого
+    #                       вуза человека нет — штатный случай (например,
+    #                       МЭИ подавал не в Политех), а не поломка бота
+    empty_reason: str | None = None
 
     @property
     def options_by_key(self) -> dict[str, UserProgramOption]:
@@ -55,13 +66,43 @@ def _session_key(chat_id: int, university: str) -> tuple[int, str]:
     return chat_id, university
 
 
+def _load_options(chat_id: int, university: str) -> tuple[list[UserProgramOption], str | None]:
+    """Направления пользователя из его реального конкурсного списка + причина
+    пустоты (см. PriorityEditorState.empty_reason), если направлений нет."""
+    from ..telegram_users import build_robot_settings, get_user_code
+    from .simulator import POOL_NOT_READY_ERROR, run_robot_simulation
+
+    code = get_user_code(chat_id)
+    if not code:
+        return [], "no_code"
+
+    # Без priority_ids: build_robot_settings строит настройки с нуля и не
+    # тащит сохранённый порядок (см. её докстрока), поэтому
+    # result.user_programs — это направления РОВНО в том порядке, в котором
+    # человек подавал их на сайте вуза. Редактор должен листать эту настоящую
+    # вселенную направлений целиком, а не то, что было переставлено раньше.
+    # stale_ok=True: обработчик команд Telegram крутится в одном потоке с
+    # getUpdates — сетевой поход здесь подвесил бы бота всем чатам разом,
+    # пересборку заказывает RefreshWorker отдельно.
+    settings = build_robot_settings(code, university)
+    result = run_robot_simulation(university, settings=settings, stale_ok=True)
+    options = [
+        UserProgramOption(key=state.program_key, title=state.title)
+        for state in result.user_programs
+    ]
+    if options:
+        return options, None
+    if result.error == POOL_NOT_READY_ERROR:
+        return [], "pool_not_ready"
+    return [], "not_in_list"
+
+
 def load_priority_editor(
     chat_id: int,
     university: str = DEFAULT_UNIVERSITY,
     parser: str | None = None,
 ) -> PriorityEditorState:
-    from ..telegram_users import build_robot_settings, get_user_code, robot_config_path
-    from .simulator import run_robot_simulation
+    from ..telegram_users import robot_config_path
     from .universities import SUPPORTED_UNIVERSITIES
 
     if parser is None:
@@ -70,40 +111,28 @@ def load_priority_editor(
     session_key = _session_key(chat_id, university)
     session = _priority_sessions.get(session_key)
     if session is not None:
-        # Сессия редактирования уже открыта — отдаём ЗАМОРОЖЕННЫЙ на её
-        # начало options, а не свежий пересчёт из пула. build_priority_keyboard
-        # кодирует в callback_data ПОЗИЦИЮ в options; если между двумя
-        # нажатиями в одной сессии RefreshWorker пересоберёт кэш этого вуза
-        # (циклы идут минутами, пользователь вполне может столько сидеть с
-        # открытой клавиатурой) и порядок конкурсного списка на сайте
-        # изменится, свежий пересчёт молча подсунул бы под старый индекс
-        # ДРУГОЕ направление — нажатие переставило бы не то, что человек видел.
         priority_keys, options = session
-        return PriorityEditorState(
-            university=university,
-            parser=parser,
-            priority_keys=list(priority_keys),
-            options=list(options),
-        )
+        if options:
+            # Сессия редактирования уже открыта — отдаём ЗАМОРОЖЕННЫЙ на её
+            # начало options, а не свежий пересчёт из пула. build_priority_keyboard
+            # кодирует в callback_data ПОЗИЦИЮ в options; если между двумя
+            # нажатиями в одной сессии RefreshWorker пересоберёт кэш этого вуза
+            # (циклы идут минутами, пользователь вполне может столько сидеть с
+            # открытой клавиатурой) и порядок конкурсного списка на сайте
+            # изменится, свежий пересчёт молча подсунул бы под старый индекс
+            # ДРУГОЕ направление — нажатие переставило бы не то, что человек видел.
+            return PriorityEditorState(
+                university=university,
+                parser=parser,
+                priority_keys=list(priority_keys),
+                options=list(options),
+            )
+        # Замороженная сессия без единого направления — редактировать нечего,
+        # заморозка индексов здесь ничего не защищает (клавиатура и так без
+        # кнопок направлений). Не тащим устаревшую пустую заморозку дальше,
+        # пересчитываем причину пустоты свежо ниже.
 
-    options: list[UserProgramOption] = []
-    code = get_user_code(chat_id)
-    if code:
-        # Без priority_ids: build_robot_settings строит настройки с нуля и не
-        # тащит сохранённый порядок (см. её докстрока), поэтому
-        # result.user_programs — это направления РОВНО в том порядке, в
-        # котором человек подавал их на сайте вуза. Редактор должен листать
-        # эту настоящую вселенную направлений целиком, а не то, что было
-        # переставлено раньше.
-        # stale_ok=True: обработчик команд Telegram крутится в одном потоке с
-        # getUpdates — сетевой поход здесь подвесил бы бота всем чатам разом,
-        # пересборку заказывает RefreshWorker отдельно.
-        settings = build_robot_settings(code, university)
-        result = run_robot_simulation(university, settings=settings, stale_ok=True)
-        options = [
-            UserProgramOption(key=state.program_key, title=state.title)
-            for state in result.user_programs
-        ]
+    options, empty_reason = _load_options(chat_id, university)
 
     config_path = robot_config_path(chat_id)
     # Личного файла может ещё не быть на диске (пользователь не завершил
@@ -123,6 +152,7 @@ def load_priority_editor(
         parser=parser,
         priority_keys=list(priority_keys),
         options=options,
+        empty_reason=empty_reason,
     )
 
 
@@ -142,9 +172,31 @@ def clear_priority_session(chat_id: int, university: str) -> None:
     _priority_sessions.pop(_session_key(chat_id, university), None)
 
 
+def _empty_options_message(university: str, empty_reason: str | None) -> str:
+    """Три РАЗНЫХ штатных состояния (см. PriorityEditorState.empty_reason) —
+    раньше все три читались одним «Нет отслеживаемых программ», и штатный
+    случай (человека нет в списках именно этого вуза) выглядел как поломка."""
+    if empty_reason == "no_code":
+        return "Сначала пришлите код поступающего, чтобы отслеживать приоритеты."
+    if empty_reason == "pool_not_ready":
+        return f"Списки «{university}» ещё собираются, попробуйте через пару минут."
+    # "not_in_list" и запасной случай (напр. старый вызов без empty_reason).
+    return f"Вас нет в списках «{university}»."
+
+
 def format_priority_view(state: PriorityEditorState, *, editing: bool = False) -> str:
     if not state.options:
-        return f"Нет отслеживаемых программ для «{state.university}»."
+        return _empty_options_message(state.university, state.empty_reason)
+
+    # Позиция в state.options — ЕДИНСТВЕННОЕ число, которое понимает
+    # try_parse_priority_command (parse_priority_ids сверяет с
+    # range(1, len(state.options)+1) и резолвит именно через
+    # state.options[position-1], см. её докстроку ниже по файлу). Раньше
+    # включённые пункты нумеровались порядком зачисления (1..N по
+    # priority_keys) и печатались БЕЗ этого номера вообще, а исключённые —
+    # вообще без чисел: число, которое реально ждёт «/приоритет <вуз> N»,
+    # нигде не было видно. Печатаем его рядом с каждым пунктом.
+    position_by_key = {option.key: index + 1 for index, option in enumerate(state.options)}
 
     lines = [f"📋 Приоритеты {state.university}"]
     if editing:
@@ -159,14 +211,16 @@ def format_priority_view(state: PriorityEditorState, *, editing: bool = False) -
         for rank, key in enumerate(state.priority_keys, start=1):
             option = state.options_by_key.get(key)
             title = option.title if option else f"ключ {key}"
-            lines.append(f"{rank}. {title}")
+            position = position_by_key.get(key)
+            suffix = f" (№{position})" if position is not None else ""
+            lines.append(f"{rank}. {title}{suffix}")
 
     excluded = [option for option in state.options if option.key not in state.priority_keys]
     if excluded:
         lines.append("")
         lines.append("Исключены из расчёта:")
         for option in excluded:
-            lines.append(f"• {option.title}")
+            lines.append(f"№{position_by_key[option.key]}. {option.title}")
 
     return "\n".join(lines)
 
@@ -272,14 +326,19 @@ def try_parse_priority_command(
     if not id_parts:
         return None
 
-    # Ручной ввод адресует направление НОМЕРОМ позиции в реальном списке —
-    # тем же способом, что и /робот (нумерует «Учитываются приоритеты») и
-    # /конкуренты <вуз> <номер приоритета>. Ключ пула пользователю нигде не
-    # показывается (а у ФА это ещё и целый заголовок списка, набрать его
-    # вручную нереально), поэтому набирать можно только позиции.
+    # Ручной ввод адресует направление НОМЕРОМ позиции в state.options —
+    # ИМЕННО тем числом, что format_priority_view печатает рядом с каждым
+    # пунктом (у включённых — в скобках «(№M)», у исключённых — «№M.»).
+    # Это НЕ тот же номер, что у /робот и /конкуренты: та нумерация идёт по
+    # dima_remaining_at_turn, посчитанному С сохранённым порядком и только по
+    # включённым направлениям, и после первого сохранения в общем случае
+    # расходится с позицией в options (см. Important-находку про это).
+    # Ключ пула пользователю нигде не показывается (а у ФА это ещё и целый
+    # заголовок списка, набрать его вручную нереально), поэтому набирать
+    # можно только позиции — те, что видны в редакторе.
     state = load_priority_editor(chat_id, university=university)
     if not state.options:
-        raise ValueError(f"Нет направлений для «{university}» — код не найден в списках вуза")
+        raise ValueError(_empty_options_message(university, state.empty_reason))
     positions = parse_priority_ids(" ".join(id_parts), set(range(1, len(state.options) + 1)))
     return university, [state.options[position - 1].key for position in positions]
 
