@@ -68,7 +68,12 @@ def _ca_bundle() -> str:
     """
     global _ca_bundle_path
     with _ca_bundle_lock:
-        if _ca_bundle_path is not None:
+        # Проверяем не только «путь уже вычислен», но и что файл физически
+        # ещё на диске: data/cache/ чистится вручную как штатная операция
+        # (это gitignored рабочий кэш), и если бандл снесли при живом боте,
+        # закэшированный путь без этой проверки указывал бы в никуда —
+        # все дальнейшие запросы Политеха падали бы по TLS до рестарта.
+        if _ca_bundle_path is not None and Path(_ca_bundle_path).exists():
             return _ca_bundle_path
         _CA_BUNDLE_PATH.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(
