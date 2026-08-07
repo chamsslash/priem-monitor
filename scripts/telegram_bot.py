@@ -226,7 +226,7 @@ def _send_priority_editor(
 
 
 def _handle_priority_callback(config, callback_query: dict) -> None:
-    from src.robot.priorities import save_priority_ids
+    from src.robot.priorities import save_priority_keys
     from src.robot.telegram_priorities import (
         build_priority_keyboard,
         clear_priority_session,
@@ -285,18 +285,23 @@ def _handle_priority_callback(config, callback_query: dict) -> None:
         return
 
     if op in {"tog", "up", "dn"} and len(action) == 3:
+        # callback_data несёт ПОЗИЦИЮ в state.options, а не ключ направления —
+        # ключ ФА — это целый заголовок конкурсного списка, он не влезает в
+        # лимит Telegram на callback_data (64 байта). Переводим обратно в
+        # ключ прямо здесь, в рамках того же рендера, что и build_priority_keyboard.
         try:
-            program_id = int(action[2])
-        except ValueError:
+            index = int(action[2])
+            program_key = state.options[index].key
+        except (ValueError, IndexError):
             answer_callback_query(config.bot_token, callback_id, text="Ошибка")
             return
         if op == "tog":
-            toggle_program(state, program_id)
+            toggle_program(state, program_key)
             toast = "Обновлено"
         elif op == "up":
-            toast = "Выше" if move_program(state, program_id, "up") else "Уже первый"
+            toast = "Выше" if move_program(state, program_key, "up") else "Уже первый"
         elif op == "dn":
-            toast = "Ниже" if move_program(state, program_id, "down") else "Уже последний"
+            toast = "Ниже" if move_program(state, program_key, "down") else "Уже последний"
         save_priority_editor(chat_id, state)
         edit_message_text(
             config.bot_token,
@@ -309,12 +314,12 @@ def _handle_priority_callback(config, callback_query: dict) -> None:
         return
 
     if op == "save":
-        if not state.priority_ids:
+        if not state.priority_keys:
             answer_callback_query(config.bot_token, callback_id, text="Выберите хотя бы одну программу")
             return
         from src.telegram_users import robot_config_path
 
-        save_priority_ids(state.university, state.priority_ids, path=robot_config_path(chat_id))
+        save_priority_keys(state.university, state.priority_keys, path=robot_config_path(chat_id))
         clear_priority_session(chat_id, state.university)
         from src.robot.telegram_priorities import build_priority_view_keyboard
 
@@ -482,7 +487,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
 
     if command == "/статус":
         try:
-            from src.robot.priorities import get_saved_priority_ids
+            from src.robot.priorities import get_saved_priority_keys
             from src.robot.refresh_worker import get_refresh_worker
             from src.robot.simulator import run_robot_simulation
             from src.robot.universities import SUPPORTED_UNIVERSITIES, is_pool_stale, robot_ready_universities
@@ -494,7 +499,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             stale_any = False
             for university in sorted(robot_ready_universities()):
                 settings = build_robot_settings(code, university)
-                priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
+                priority_ids = get_saved_priority_keys(university, path=robot_config_path(chat_id))
                 # stale_ok=True: читаем кэш и отвечаем мгновенно. Сетевая пересборка
                 # здесь подвесила бы цикл getUpdates для всех чатов сразу.
                 result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
@@ -516,7 +521,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
         parts = text.strip().split()
         try:
             from src.robot.format import format_robot_cache_refresh, format_robot_result
-            from src.robot.priorities import get_saved_priority_ids
+            from src.robot.priorities import get_saved_priority_keys
             from src.robot.simulator import run_robot_simulation
             from src.robot.universities import SUPPORTED_UNIVERSITIES, parse_robot_command
 
@@ -607,7 +612,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             from src.robot.universities import is_pool_stale
 
             settings = build_robot_settings(code, university)
-            priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
+            priority_ids = get_saved_priority_keys(university, path=robot_config_path(chat_id))
             result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
             send_long_message(config.bot_token, chat_id, format_robot_result(result), reply_to=message_id)
             # config_error (вуз отключён/нет программ в конфиге) — пул вообще
@@ -625,7 +630,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
         parts = text.strip().split()
         try:
             from src.robot.format import format_competitors
-            from src.robot.priorities import get_saved_priority_ids
+            from src.robot.priorities import get_saved_priority_keys
             from src.robot.refresh_worker import get_refresh_worker
             from src.robot.simulator import run_robot_simulation
             from src.robot.universities import SUPPORTED_UNIVERSITIES, is_pool_stale, match_university_prefix
@@ -670,7 +675,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 return
 
             settings = build_robot_settings(code, university)
-            priority_ids = get_saved_priority_ids(university, path=robot_config_path(chat_id))
+            priority_ids = get_saved_priority_keys(university, path=robot_config_path(chat_id))
             result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
             send_long_message(config.bot_token, chat_id, format_competitors(result, priority_number), reply_to=message_id)
             # См. аналогичный комментарий в /робот выше: config_error не
@@ -685,7 +690,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
     if command in {"/приоритет", "/приоритеты", "/priority"}:
         parts = text.strip().split()
         try:
-            from src.robot.priorities import save_priority_ids
+            from src.robot.priorities import save_priority_keys
             from src.robot.telegram_priorities import (
                 PriorityEditorState,
                 format_saved_confirmation,
@@ -708,18 +713,19 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
 
             parsed = try_parse_priority_command(
                 text,
+                chat_id,
                 default_university=university,
                 supported_universities=set(SUPPORTED_UNIVERSITIES),
             )
             if parsed is not None:
-                parsed_university, priority_ids = parsed
-                if priority_ids:
-                    save_priority_ids(parsed_university, priority_ids, path=robot_config_path(chat_id))
+                parsed_university, priority_keys = parsed
+                if priority_keys:
+                    save_priority_keys(parsed_university, priority_keys, path=robot_config_path(chat_id))
                     state = load_priority_editor(chat_id, university=parsed_university)
                     saved_state = PriorityEditorState(
                         university=parsed_university,
                         parser=state.parser,
-                        priority_ids=priority_ids,
+                        priority_keys=priority_keys,
                         options=state.options,
                     )
                     send_message(

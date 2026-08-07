@@ -66,13 +66,22 @@ def load_raw_config(path: Path | None = None) -> dict:
     return json.loads(config_path.read_text(encoding="utf-8"))
 
 
-def get_saved_priority_ids(university: str, path: Path | None = None) -> list[int]:
+def get_saved_priority_keys(university: str, path: Path | None = None) -> list[str]:
+    """Возвращает сохранённый порядок направлений — ключи RobotProgram.key.
+
+    Старый формат хранил числовой id из config/programs.json (до этой задачи).
+    Такие записи НЕ конвертируются: читаем их как есть (без принудительного
+    str()/int()), и caller сверяет со множеством реальных ключей пула — число
+    там просто не совпадёт ни с одной строкой и молча отсеется (см.
+    interactive_set_priorities и telegram_priorities.load_priority_editor).
+    Принудительный int(item), который был здесь раньше, уронил бы чтение на
+    современном значении вроде title ФА, которое в int не превращается."""
     raw = load_raw_config(path)
     university_cfg = raw.get("universities", {}).get(university, {})
-    return [int(item) for item in university_cfg.get("dima_priorities", [])]
+    return list(university_cfg.get("dima_priorities", []))
 
 
-def save_priority_ids(university: str, priority_ids: list[int], path: Path | None = None) -> Path:
+def save_priority_keys(university: str, priority_keys: list[str], path: Path | None = None) -> Path:
     config_path = path or DEFAULT_ROBOT_JSON
     if not config_path.exists():
         raw = json.loads(EXAMPLE_ROBOT_JSON.read_text(encoding="utf-8"))
@@ -81,7 +90,7 @@ def save_priority_ids(university: str, priority_ids: list[int], path: Path | Non
 
     universities = raw.setdefault("universities", {})
     university_cfg = universities.setdefault(university, {"enabled": True})
-    university_cfg["dima_priorities"] = priority_ids
+    university_cfg["dima_priorities"] = priority_keys
     university_cfg["enabled"] = True
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -118,7 +127,7 @@ def interactive_set_priorities(university: str, parser: str) -> list[int]:
         raise ValueError(f"Нет отслеживаемых программ для «{university}»")
 
     available = {option.program_id for option in options}
-    saved = [item for item in get_saved_priority_ids(university) if item in available]
+    saved = [item for item in get_saved_priority_keys(university) if item in available]
 
     print(f"\nПрограммы {university} (только выбранные попадут в расчёт):\n")
     for option in options:

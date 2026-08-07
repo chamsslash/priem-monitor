@@ -2,33 +2,37 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .priorities import (
-    ProgramOption,
-    format_program_list,
-    get_saved_priority_ids,
-    list_university_programs,
-    parse_priority_ids,
-    save_priority_ids,
-)
+from .priorities import get_saved_priority_keys, parse_priority_ids
 
 DEFAULT_UNIVERSITY = "МИРЭА"
 DEFAULT_PARSER = "mirea"
 TELEGRAM_BUTTON_LIMIT = 64
 
 # (chat_id, university) -> draft priority order during inline editing
-_priority_sessions: dict[tuple[int, str], list[int]] = {}
+_priority_sessions: dict[tuple[int, str], list[str]] = {}
+
+
+@dataclass
+class UserProgramOption:
+    """Одно направление пользователя, как оно реально стоит в его конкурсном
+    списке — key берём из RobotProgram.key (ключ пула), а не program_id из
+    config/programs.json: у большинства направлений пользователя id в
+    конфиге просто нет, они там никогда не были описаны."""
+
+    key: str
+    title: str
 
 
 @dataclass
 class PriorityEditorState:
     university: str = DEFAULT_UNIVERSITY
     parser: str = DEFAULT_PARSER
-    priority_ids: list[int] = field(default_factory=list)
-    options: list[ProgramOption] = field(default_factory=list)
+    priority_keys: list[str] = field(default_factory=list)
+    options: list[UserProgramOption] = field(default_factory=list)
 
     @property
-    def options_by_id(self) -> dict[int, ProgramOption]:
-        return {option.program_id: option for option in self.options}
+    def options_by_key(self) -> dict[str, UserProgramOption]:
+        return {option.key: option for option in self.options}
 
 
 def _button_label(title: str, prefix: str = "") -> str:
@@ -47,34 +51,56 @@ def load_priority_editor(
     university: str = DEFAULT_UNIVERSITY,
     parser: str | None = None,
 ) -> PriorityEditorState:
-    from ..telegram_users import robot_config_path
+    from ..telegram_users import build_robot_settings, get_user_code, robot_config_path
+    from .simulator import run_robot_simulation
+    from .universities import SUPPORTED_UNIVERSITIES
 
     if parser is None:
-        from .universities import SUPPORTED_UNIVERSITIES
-
         parser = SUPPORTED_UNIVERSITIES.get(university, DEFAULT_PARSER)
-    options = list_university_programs(university, parser)
+
+    options: list[UserProgramOption] = []
+    code = get_user_code(chat_id)
+    if code:
+        # Без priority_ids: build_robot_settings строит настройки с нуля и не
+        # тащит сохранённый порядок (см. её докстрока), поэтому
+        # result.user_programs — это направления РОВНО в том порядке, в
+        # котором человек подавал их на сайте вуза. Редактор должен листать
+        # эту настоящую вселенную направлений целиком, а не то, что было
+        # переставлено раньше.
+        # stale_ok=True: обработчик команд Telegram крутится в одном потоке с
+        # getUpdates — сетевой поход здесь подвесил бы бота всем чатам разом,
+        # пересборку заказывает RefreshWorker отдельно.
+        settings = build_robot_settings(code, university)
+        result = run_robot_simulation(university, settings=settings, stale_ok=True)
+        options = [
+            UserProgramOption(key=state.program_key, title=state.title)
+            for state in result.user_programs
+        ]
+
     config_path = robot_config_path(chat_id)
     # Личного файла может ещё не быть на диске (пользователь не завершил
-    # регистрацию по коду) — в этом случае get_saved_priority_ids ушёл бы
+    # регистрацию по коду) — в этом случае get_saved_priority_keys ушёл бы
     # в load_raw_config() и откатился на config/robot.example.json, где
-    # лежат настоящие Димины приоритеты. Читаем сохранённые приоритеты
-    # только если личный файл реально существует, иначе считаем, что
-    # приоритетов пока нет.
-    saved = get_saved_priority_ids(university, path=config_path) if config_path.exists() else []
-    available = {option.program_id for option in options}
+    # лежат настоящие Димины приоритеты. Читаем сохранённый порядок только
+    # если личный файл реально существует, иначе считаем, что порядок не
+    # задан (используется реальный, поданный на сайте).
+    saved = get_saved_priority_keys(university, path=config_path) if config_path.exists() else []
+    # Чужой/устаревший ключ (в т.ч. числовой id старого формата хранения —
+    # int никогда не равен str, даже при совпадающих цифрах) просто не
+    # попадёт в available и молча отсеется здесь.
+    available = {option.key for option in options}
     session_key = _session_key(chat_id, university)
-    priority_ids = _priority_sessions.get(session_key) or [item for item in saved if item in available]
+    priority_keys = _priority_sessions.get(session_key) or [item for item in saved if item in available]
     return PriorityEditorState(
         university=university,
         parser=parser,
-        priority_ids=list(priority_ids),
+        priority_keys=list(priority_keys),
         options=options,
     )
 
 
 def save_priority_editor(chat_id: int, state: PriorityEditorState) -> None:
-    _priority_sessions[_session_key(chat_id, state.university)] = list(state.priority_ids)
+    _priority_sessions[_session_key(chat_id, state.university)] = list(state.priority_keys)
 
 
 def clear_priority_session(chat_id: int, university: str) -> None:
@@ -92,15 +118,15 @@ def format_priority_view(state: PriorityEditorState, *, editing: bool = False) -
     else:
         lines.append("Порядок зачисления в роботе:")
 
-    if not state.priority_ids:
+    if not state.priority_keys:
         lines.append("— не заданы —")
     else:
-        for rank, program_id in enumerate(state.priority_ids, start=1):
-            option = state.options_by_id.get(program_id)
-            title = option.title if option else f"id {program_id}"
+        for rank, key in enumerate(state.priority_keys, start=1):
+            option = state.options_by_key.get(key)
+            title = option.title if option else f"ключ {key}"
             lines.append(f"{rank}. {title}")
 
-    excluded = [option for option in state.options if option.program_id not in state.priority_ids]
+    excluded = [option for option in state.options if option.key not in state.priority_keys]
     if excluded:
         lines.append("")
         lines.append("Исключены из расчёта:")
@@ -112,20 +138,25 @@ def format_priority_view(state: PriorityEditorState, *, editing: bool = False) -
 
 def build_priority_keyboard(state: PriorityEditorState) -> dict:
     buttons: list[list[dict[str, str]]] = []
-    priority_set = set(state.priority_ids)
+    priority_set = set(state.priority_keys)
 
-    for option in state.options:
-        program_id = option.program_id
-        if program_id in priority_set:
-            rank = state.priority_ids.index(program_id) + 1
+    # callback_data кодирует ПОЗИЦИЮ в state.options, а не сам ключ: у ФА
+    # ключ — это целый заголовок конкурсного списка (десятки символов),
+    # он не влезает в лимит Telegram на callback_data (64 байта), да и у
+    # остальных вузов ключ — это внутренний id, незачем гонять его в оба
+    # конца. Обработчик в scripts/telegram_bot.py переводит индекс обратно
+    # в ключ через state.options сразу после клика, в рамках того же рендера.
+    for index, option in enumerate(state.options):
+        if option.key in priority_set:
+            rank = state.priority_keys.index(option.key) + 1
             prefix = f"✓ {rank}. "
             buttons.append(
                 [
-                    {"text": "↑", "callback_data": f"prio:up:{program_id}"},
-                    {"text": "↓", "callback_data": f"prio:dn:{program_id}"},
+                    {"text": "↑", "callback_data": f"prio:up:{index}"},
+                    {"text": "↓", "callback_data": f"prio:dn:{index}"},
                     {
                         "text": prefix + _button_label(option.title, prefix),
-                        "callback_data": f"prio:tog:{program_id}",
+                        "callback_data": f"prio:tog:{index}",
                     },
                 ]
             )
@@ -135,7 +166,7 @@ def build_priority_keyboard(state: PriorityEditorState) -> dict:
                 [
                     {
                         "text": prefix + _button_label(option.title, prefix),
-                        "callback_data": f"prio:tog:{program_id}",
+                        "callback_data": f"prio:tog:{index}",
                     }
                 ]
             )
@@ -153,27 +184,27 @@ def build_priority_view_keyboard() -> dict:
     return {"inline_keyboard": [[{"text": "✏️ Изменить", "callback_data": "prio:edit"}]]}
 
 
-def toggle_program(state: PriorityEditorState, program_id: int) -> None:
-    if program_id in state.priority_ids:
-        state.priority_ids.remove(program_id)
+def toggle_program(state: PriorityEditorState, key: str) -> None:
+    if key in state.priority_keys:
+        state.priority_keys.remove(key)
     else:
-        state.priority_ids.append(program_id)
+        state.priority_keys.append(key)
 
 
-def move_program(state: PriorityEditorState, program_id: int, direction: str) -> bool:
-    if program_id not in state.priority_ids:
+def move_program(state: PriorityEditorState, key: str, direction: str) -> bool:
+    if key not in state.priority_keys:
         return False
-    index = state.priority_ids.index(program_id)
+    index = state.priority_keys.index(key)
     if direction == "up" and index > 0:
-        state.priority_ids[index], state.priority_ids[index - 1] = (
-            state.priority_ids[index - 1],
-            state.priority_ids[index],
+        state.priority_keys[index], state.priority_keys[index - 1] = (
+            state.priority_keys[index - 1],
+            state.priority_keys[index],
         )
         return True
-    if direction == "down" and index < len(state.priority_ids) - 1:
-        state.priority_ids[index], state.priority_ids[index + 1] = (
-            state.priority_ids[index + 1],
-            state.priority_ids[index],
+    if direction == "down" and index < len(state.priority_keys) - 1:
+        state.priority_keys[index], state.priority_keys[index + 1] = (
+            state.priority_keys[index + 1],
+            state.priority_keys[index],
         )
         return True
     return False
@@ -181,15 +212,16 @@ def move_program(state: PriorityEditorState, program_id: int, direction: str) ->
 
 def try_parse_priority_command(
     text: str,
+    chat_id: int,
     *,
     default_university: str = DEFAULT_UNIVERSITY,
     supported_universities: set[str] | None = None,
-) -> tuple[str, list[int]] | None:
+) -> tuple[str, list[str]] | None:
     parts = text.strip().split()
     if len(parts) < 2:
         return None
 
-    from .universities import SUPPORTED_UNIVERSITIES, match_university_prefix
+    from .universities import match_university_prefix
 
     supported = supported_universities or set()
     university = default_university
@@ -205,11 +237,16 @@ def try_parse_priority_command(
     if not id_parts:
         return None
 
-    parser_name = SUPPORTED_UNIVERSITIES.get(university)
-    if parser_name is None:
-        raise ValueError(f"Робот не поддерживает «{university}»")
-    available = {option.program_id for option in list_university_programs(university, parser_name)}
-    return university, parse_priority_ids(" ".join(id_parts), available)
+    # Ручной ввод адресует направление НОМЕРОМ позиции в реальном списке —
+    # тем же способом, что и /робот (нумерует «Учитываются приоритеты») и
+    # /конкуренты <вуз> <номер приоритета>. Ключ пула пользователю нигде не
+    # показывается (а у ФА это ещё и целый заголовок списка, набрать его
+    # вручную нереально), поэтому набирать можно только позиции.
+    state = load_priority_editor(chat_id, university=university)
+    if not state.options:
+        raise ValueError(f"Нет направлений для «{university}» — код не найден в списках вуза")
+    positions = parse_priority_ids(" ".join(id_parts), set(range(1, len(state.options) + 1)))
+    return university, [state.options[position - 1].key for position in positions]
 
 
 def university_from_message(text: str) -> str:
@@ -223,8 +260,4 @@ def university_from_message(text: str) -> str:
 
 
 def format_saved_confirmation(state: PriorityEditorState) -> str:
-    return "✅ Приоритеты сохранены.\n\n" + format_program_list(
-        state.university,
-        state.parser,
-        state.priority_ids,
-    )
+    return "✅ Приоритеты сохранены.\n\n" + format_priority_view(state, editing=False)

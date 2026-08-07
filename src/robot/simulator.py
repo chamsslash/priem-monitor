@@ -64,29 +64,31 @@ def _build_dima_person(
 
 def _apply_priority_order(
     dima: RobotPerson,
-    tracked_programs: list[ProgramConfig],
-    priority_ids: list[int],
+    priority_keys: list[str],
     *,
     require_in_pool: bool = True,
 ) -> RobotPerson:
-    if not priority_ids:
+    """priority_keys — сохранённый пользователем порядок, ключи RobotProgram.key
+    (см. priorities.get_saved_priority_keys). Раньше это были id из
+    config/programs.json, которые транслировались в ключ через
+    tracked_programs/direction_key_for_program — конфиг в этой функции больше
+    не участвует вообще: ключ уже настоящий и сверяется с пулом напрямую.
+    Чужой/устаревший ключ (в т.ч. число из старого формата хранения — int
+    никогда не равен str, даже при совпадающих цифрах) просто не находится в
+    pool_keys и отбрасывается ниже, а не превращается в фиктивное направление."""
+    if not priority_keys:
         return dima
 
-    tracked_by_id = {program.id: program for program in tracked_programs}
     pool_keys = {choice.program_key for choice in dima.choices}
     new_choices: list[ProgramChoice] = []
 
-    for index, program_id in enumerate(priority_ids):
-        program = tracked_by_id.get(program_id)
-        if program is None:
+    for index, key in enumerate(priority_keys):
+        if require_in_pool and key not in pool_keys:
             continue
-        program_key = direction_key_for_program(program)
-        if require_in_pool and program_key not in pool_keys:
-            continue
-        original = next((choice for choice in dima.choices if choice.program_key == program_key), None)
+        original = next((choice for choice in dima.choices if choice.program_key == key), None)
         new_choices.append(
             ProgramChoice(
-                program_key=program_key,
+                program_key=key,
                 priority=index + 1,
                 is_bvi=original.is_bvi if original is not None else False,
                 # Без переноса этого флага пересборка выборов при сохранённом
@@ -119,7 +121,14 @@ def _resolve_dima_person(
     tracked_programs: list[ProgramConfig],
     people: list[RobotPerson],
     *,
-    priority_ids: list[int] | None = None,
+    # Тип двоякий по историческим причинам: с dima_list_code (реальный
+    # зарегистрированный пользователь) это ключи RobotProgram.key — см.
+    # _apply_priority_order ниже; без dima_list_code (легаси-сценарий
+    # config/robot.json без кода, только _build_dima_person) это по-прежнему
+    # числовые id config/programs.json. Список остаётся list без строгой
+    # типизации элементов намеренно — вводить Union ради одного легаси-пути
+    # не стоит.
+    priority_ids: list | None = None,
 ) -> tuple[RobotPerson, bool]:
     list_code = university_cfg.get("dima_list_code")
     if list_code:
@@ -141,7 +150,12 @@ def _resolve_dima_person(
         )
         saved_ids = priority_ids
         if saved_ids is None:
-            saved_ids = [int(item) for item in university_cfg.get("dima_priorities", [])]
+            # Без принудительного int(): значения здесь либо старые числовые
+            # id из config/programs.json (легаси config/robot.example.json —
+            # ниже они всё равно не совпадут ни с одним строковым ключом
+            # пула и будут отброшены), либо уже настоящие ключи-строки.
+            # int() уронил бы это на нечисловом ключе.
+            saved_ids = list(university_cfg.get("dima_priorities", []))
         if saved_ids:
             # require_in_pool=True: сохранённый порядок может только
             # ПЕРЕУПОРЯДОЧИТЬ реальные выборы Димы, а не дописать направление,
@@ -158,7 +172,7 @@ def _resolve_dima_person(
             # файлу), иначе каскад посчитает место снова свободным. Проверено
             # живьём на реальном коде МИРЭА с сохранённым переупорядочиванием:
             # направление видно в показе И каскад его не занимает.
-            dima = _apply_priority_order(dima, tracked_programs, saved_ids, require_in_pool=True)
+            dima = _apply_priority_order(dima, saved_ids, require_in_pool=True)
         return dima, True
     return _build_dima_person(settings, university_cfg, tracked_programs, priority_ids=priority_ids), False
 
@@ -515,7 +529,11 @@ def run_robot_simulation(
     *,
     use_cache: bool = True,
     stale_ok: bool = False,
-    priority_ids: list[int] | None = None,
+    # Ключи RobotProgram.key для зарегистрированного пользователя (обычный
+    # продуктовый путь — см. _resolve_dima_person); числовые id
+    # config/programs.json остаются только в легаси-сценарии без
+    # dima_list_code. См. комментарий у priority_ids в _resolve_dima_person.
+    priority_ids: list | None = None,
 ) -> RobotSimulationResult:
     """stale_ok=True — брать пул ТОЛЬКО из кэша, любого возраста, и никогда не
     ходить в сеть. Режим для обработчиков команд Telegram: они крутятся в том же

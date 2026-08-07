@@ -13,11 +13,11 @@ from src.robot.config import load_robot_config
 from src.robot.format import format_robot_result
 from src.robot.priorities import (
     format_program_list,
-    get_saved_priority_ids,
+    get_saved_priority_keys,
     interactive_set_priorities,
     list_university_programs,
     parse_priority_ids,
-    save_priority_ids,
+    save_priority_keys,
 )
 from src.robot.simulator import run_robot_simulation
 from src.robot.universities import SUPPORTED_UNIVERSITIES
@@ -65,7 +65,7 @@ def main() -> int:
         return 1
 
     if args.list_programs:
-        saved = get_saved_priority_ids(university)
+        saved = get_saved_priority_keys(university)
         print(format_program_list(university, parser_name, saved))
         return 0
 
@@ -74,7 +74,7 @@ def main() -> int:
     if args.set_priorities:
         priority_ids = interactive_set_priorities(university, parser_name)
         if args.save_priorities or input("Сохранить в config/robot.json? [y/N] ").strip().lower() in {"y", "yes", "д", "да"}:
-            path = save_priority_ids(university, priority_ids)
+            path = save_priority_keys(university, priority_ids)
             print(f"Сохранено: {path}")
     elif args.priorities:
         available = {option.program_id for option in list_university_programs(university, parser_name)}
@@ -84,10 +84,10 @@ def main() -> int:
             print(f"Ошибка: {exc}", file=sys.stderr)
             return 1
         if args.save_priorities:
-            path = save_priority_ids(university, priority_ids)
+            path = save_priority_keys(university, priority_ids)
             print(f"Сохранено: {path}")
     else:
-        saved = get_saved_priority_ids(university)
+        saved = get_saved_priority_keys(university)
         if not saved:
             print("Приоритеты не заданы. Запустите с --set-priorities или --priorities.")
             print(format_program_list(university, parser_name))
