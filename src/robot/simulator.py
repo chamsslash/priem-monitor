@@ -34,13 +34,11 @@ def _build_dima_person(
     settings: RobotSettings,
     university_cfg: dict,
     tracked_programs: list[ProgramConfig],
-    *,
-    priority_ids: list[int] | None = None,
 ) -> RobotPerson:
-    if priority_ids is not None:
-        selected_ids = [int(item) for item in priority_ids]
-    else:
-        selected_ids = [int(item) for item in university_cfg.get("dima_priorities", [])]
+    # Легаси-путь: вуз без dima_list_code в конфиге (сейчас — только Московский
+    # политех при запуске без реального кода поступающего) — порядок задаётся
+    # напрямую в config/robot.json числовыми id config/programs.json.
+    selected_ids = [int(item) for item in university_cfg.get("dima_priorities", [])]
 
     tracked_by_id = {program.id: program for program in tracked_programs}
     choices: list[ProgramChoice] = []
@@ -52,7 +50,7 @@ def _build_dima_person(
             ProgramChoice(program_key=direction_key_for_program(program), priority=index + 1)
         )
     if not choices:
-        raise ValueError("Не заданы приоритеты: укажите dima_priorities в config/robot.json или через --priorities")
+        raise ValueError("Не заданы приоритеты: укажите dima_priorities в config/robot.json")
     return RobotPerson(
         code=settings.dima_code,
         score=settings.dima_score,
@@ -62,71 +60,11 @@ def _build_dima_person(
     )
 
 
-def _apply_priority_order(
-    dima: RobotPerson,
-    priority_keys: list[str],
-    *,
-    require_in_pool: bool = True,
-) -> RobotPerson:
-    """priority_keys — сохранённый пользователем порядок, ключи RobotProgram.key
-    (см. priorities.get_saved_priority_keys). Раньше это были id из
-    config/programs.json, которые транслировались в ключ через
-    tracked_programs/direction_key_for_program — конфиг в этой функции больше
-    не участвует вообще: ключ уже настоящий и сверяется с пулом напрямую.
-    Чужой/устаревший ключ (в т.ч. число из старого формата хранения — int
-    никогда не равен str, даже при совпадающих цифрах) просто не находится в
-    pool_keys и отбрасывается ниже, а не превращается в фиктивное направление."""
-    if not priority_keys:
-        return dima
-
-    pool_keys = {choice.program_key for choice in dima.choices}
-    new_choices: list[ProgramChoice] = []
-
-    for index, key in enumerate(priority_keys):
-        if require_in_pool and key not in pool_keys:
-            continue
-        original = next((choice for choice in dima.choices if choice.program_key == key), None)
-        new_choices.append(
-            ProgramChoice(
-                program_key=key,
-                priority=index + 1,
-                is_bvi=original.is_bvi if original is not None else False,
-                # Без переноса этого флага пересборка выборов при сохранённом
-                # порядке приоритетов «забывала» бы, что сайт уже вычеркнул
-                # человека отсюда («Зачисляется в другой КГ» / «Исключен —
-                # зачислен на другой конкурс»): ProgramChoice по умолчанию
-                # enrolls_elsewhere=False, и каскад (ordered_program_keys())
-                # снова считал бы место здесь свободным для него — то есть
-                # сажал бы человека туда, где сайт уже видит другого, и дважды
-                # отдавал бы то же место.
-                enrolls_elsewhere=original.enrolls_elsewhere if original is not None else False,
-            )
-        )
-
-    if not new_choices:
-        return dima
-
-    return RobotPerson(
-        code=dima.code,
-        score=dima.score,
-        consent=dima.consent,
-        is_bvi=any(choice.is_bvi for choice in new_choices),
-        choices=new_choices,
-    )
-
-
 def _resolve_dima_person(
     settings: RobotSettings,
     university_cfg: dict,
     tracked_programs: list[ProgramConfig],
     people: list[RobotPerson],
-    *,
-    # Тип двоякий по историческим причинам: с dima_list_code (реальный
-    # зарегистрированный пользователь) это ключи RobotProgram.key — см.
-    # _apply_priority_order ниже; без dima_list_code (легаси-сценарий
-    # config/robot.json без кода, только _build_dima_person) это по-прежнему
-    # числовые id config/programs.json.
-    priority_ids: list[int] | list[str] | None = None,
 ) -> tuple[RobotPerson, bool]:
     list_code = university_cfg.get("dima_list_code")
     if list_code:
@@ -135,10 +73,14 @@ def _resolve_dima_person(
             raise ValueError(f"Дима ({list_code}) не найден в списках вуза")
         # Раньше здесь выборы урезались до config/programs.json
         # (_filter_choices_to_tracked). Теперь показываем специальности как они
-        # есть в конкурсном списке — конфиг больше не сужает набор направлений,
-        # только опционально переупорядочивает его ниже. consent берём из
-        # настроек, а не из пула — это уже существующее поведение симулятора
-        # (см. комментарий в telegram_users.build_robot_settings), а не новое.
+        # есть в конкурсном списке — конфиг больше не сужает набор направлений.
+        # Порядок приоритетов — это порядок choices ИЗ ПУЛА, ровно как человек
+        # сам подал их на сайте вуза: раньше здесь ещё накладывался сохранённый
+        # ручной порядок (config dima_priorities / телеграм-редактор), теперь
+        # эта настройка снята целиком — настоящий порядок и так настоящий, его
+        # незачем перетасовывать. consent берём из настроек, а не из пула — это
+        # уже существующее поведение симулятора (см. комментарий в
+        # telegram_users.build_robot_settings), а не новое.
         dima = RobotPerson(
             code=found.code,
             score=found.score,
@@ -146,33 +88,8 @@ def _resolve_dima_person(
             is_bvi=found.is_bvi,
             choices=found.choices,
         )
-        saved_ids = priority_ids
-        if saved_ids is None:
-            # Без принудительного int(): значения здесь либо старые числовые
-            # id из config/programs.json (легаси config/robot.example.json —
-            # ниже они всё равно не совпадут ни с одним строковым ключом
-            # пула и будут отброшены), либо уже настоящие ключи-строки.
-            # int() уронил бы это на нечисловом ключе.
-            saved_ids = list(university_cfg.get("dima_priorities", []))
-        if saved_ids:
-            # require_in_pool=True: сохранённый порядок может только
-            # ПЕРЕУПОРЯДОЧИТЬ реальные выборы Димы, а не дописать направление,
-            # куда он не подавал. Флаг стоял False намеренно — ради человека,
-            # вычеркнутого пометкой «Зачисляется в другой КГ» (enrolls_elsewhere),
-            # его тоже нужно показывать. Это по-прежнему так и при True: такие
-            # выборы остаются в dima.choices, а pool_keys внутри
-            # _apply_priority_order строится по choices целиком, а не по
-            # урезанному ordered_program_keys(). Но «видимость» и «каскад его
-            # не занимает» — два РАЗНЫХ инварианта: то, что выбор виден в
-            # показе, не значит, что enrolls_elsewhere сохранился и после
-            # пересборки внутри _apply_priority_order — этот флаг там нужно
-            # переносить явно (см. комментарий у new_choices.append ниже по
-            # файлу), иначе каскад посчитает место снова свободным. Проверено
-            # живьём на реальном коде МИРЭА с сохранённым переупорядочиванием:
-            # направление видно в показе И каскад его не занимает.
-            dima = _apply_priority_order(dima, saved_ids, require_in_pool=True)
         return dima, True
-    return _build_dima_person(settings, university_cfg, tracked_programs, priority_ids=priority_ids), False
+    return _build_dima_person(settings, university_cfg, tracked_programs), False
 
 
 def _priority_on_program(person: RobotPerson, program_key: str) -> int:
@@ -527,11 +444,6 @@ def run_robot_simulation(
     *,
     use_cache: bool = True,
     stale_ok: bool = False,
-    # Ключи RobotProgram.key для зарегистрированного пользователя (обычный
-    # продуктовый путь — см. _resolve_dima_person); числовые id
-    # config/programs.json остаются только в легаси-сценарии без
-    # dima_list_code. См. комментарий у priority_ids в _resolve_dima_person.
-    priority_ids: list[int] | list[str] | None = None,
 ) -> RobotSimulationResult:
     """stale_ok=True — брать пул ТОЛЬКО из кэша, любого возраста, и никогда не
     ходить в сеть. Режим для обработчиков команд Telegram: они крутятся в том же
@@ -606,7 +518,6 @@ def run_robot_simulation(
             university_cfg,
             tracked_programs,
             people,
-            priority_ids=priority_ids,
         )
     except ValueError as exc:
         empty.error = str(exc)

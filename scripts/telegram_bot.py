@@ -14,7 +14,6 @@ if str(ROOT) not in sys.path:
 from src.telegram_api import (
     TelegramAPIError,
     answer_callback_query,
-    edit_message_text,
     get_updates,
     load_offset,
     save_offset,
@@ -59,7 +58,6 @@ def _welcome(chat_id: int) -> str:
         "/робот [вуз] — подробная симуляция зачисления по одному вузу\n"
         "/робот обновить [вуз] — обновить кэш списков робота\n"
         "/конкуренты [вуз] <номер приоритета> — кто впереди вас по направлению (номер см. в /робот)\n"
-        "/приоритет [вуз] — свой порядок приоритетов (по умолчанию — как подано на сайте вуза)\n"
         "/код <номер> — перерегистрироваться другим кодом\n"
         "/help — справка"
     )
@@ -76,7 +74,6 @@ def _help_text() -> str:
         f"/робот [{supported}] — симуляция робота зачисления\n"
         f"/робот обновить [{supported}] — обновить кэш списков робота (сейчас: {ready})\n"
         f"/конкуренты [{supported}] <номер приоритета> — кто впереди вас по направлению (номер см. в /робот)\n"
-        f"/приоритет [{supported}] — текущие приоритеты и настройка кнопками\n"
         "/help — эта справка"
     )
 
@@ -177,183 +174,8 @@ def _format_multi_status(code: str, results: list, *, stale: bool = False) -> st
     return "\n".join(lines)
 
 
-def _send_priority_view(
-    config,
-    chat_id: int,
-    university: str = "МИРЭА",
-    *,
-    reply_to: int | None = None,
-) -> None:
-    from src.robot.telegram_priorities import (
-        build_priority_view_keyboard,
-        format_priority_view,
-        load_priority_editor,
-    )
-
-    state = load_priority_editor(chat_id, university=university)
-    send_message(
-        config.bot_token,
-        chat_id,
-        format_priority_view(state, editing=False),
-        reply_to=reply_to,
-        reply_markup=build_priority_view_keyboard(),
-    )
-
-
-def _send_priority_editor(
-    config,
-    chat_id: int,
-    university: str = "МИРЭА",
-    *,
-    reply_to: int | None = None,
-) -> None:
-    from src.robot.telegram_priorities import (
-        build_priority_keyboard,
-        format_priority_view,
-        load_priority_editor,
-        save_priority_editor,
-    )
-
-    state = load_priority_editor(chat_id, university=university)
-    save_priority_editor(chat_id, state)
-    send_message(
-        config.bot_token,
-        chat_id,
-        format_priority_view(state, editing=True),
-        reply_to=reply_to,
-        reply_markup=build_priority_keyboard(state),
-    )
-
-
-def _handle_priority_callback(config, callback_query: dict) -> None:
-    from src.robot.priorities import save_priority_keys
-    from src.robot.telegram_priorities import (
-        build_priority_keyboard,
-        clear_priority_session,
-        format_priority_view,
-        format_saved_confirmation,
-        load_priority_editor,
-        move_program,
-        save_priority_editor,
-        toggle_program,
-        university_from_message,
-    )
-
-    callback_id = callback_query["id"]
-    data = callback_query.get("data") or ""
-    message = callback_query.get("message") or {}
-    chat = message.get("chat") or {}
-    chat_id = chat.get("id")
-    message_id = message.get("message_id")
-    if chat_id is None or message_id is None:
-        return
-
-    chat_id = int(chat_id)
-    message_id = int(message_id)
-
-    from src.telegram_users import is_registered
-
-    if not is_registered(chat_id):
-        answer_callback_query(config.bot_token, callback_id, text="Сначала зарегистрируйтесь")
-        return
-
-    if not data.startswith("prio:"):
-        return
-
-    message_text = message.get("text") or ""
-    university = university_from_message(message_text)
-    state = load_priority_editor(chat_id, university=university)
-    action = data.split(":", 2)
-
-    if len(action) < 2:
-        answer_callback_query(config.bot_token, callback_id)
-        return
-
-    op = action[1]
-    toast: str | None = None
-
-    if op == "edit":
-        save_priority_editor(chat_id, state)
-        edit_message_text(
-            config.bot_token,
-            chat_id,
-            message_id,
-            format_priority_view(state, editing=True),
-            reply_markup=build_priority_keyboard(state),
-        )
-        answer_callback_query(config.bot_token, callback_id)
-        return
-
-    if op in {"tog", "up", "dn"} and len(action) == 3:
-        # callback_data несёт ПОЗИЦИЮ в state.options, а не ключ направления —
-        # ключ ФА — это целый заголовок конкурсного списка, он не влезает в
-        # лимит Telegram на callback_data (64 байта). Переводим обратно в
-        # ключ прямо здесь, в рамках того же рендера, что и build_priority_keyboard.
-        try:
-            index = int(action[2])
-            program_key = state.options[index].key
-        except (ValueError, IndexError):
-            answer_callback_query(config.bot_token, callback_id, text="Ошибка")
-            return
-        if op == "tog":
-            toggle_program(state, program_key)
-            toast = "Обновлено"
-        elif op == "up":
-            toast = "Выше" if move_program(state, program_key, "up") else "Уже первый"
-        elif op == "dn":
-            toast = "Ниже" if move_program(state, program_key, "down") else "Уже последний"
-        save_priority_editor(chat_id, state)
-        edit_message_text(
-            config.bot_token,
-            chat_id,
-            message_id,
-            format_priority_view(state, editing=True),
-            reply_markup=build_priority_keyboard(state),
-        )
-        answer_callback_query(config.bot_token, callback_id, text=toast)
-        return
-
-    if op == "save":
-        if not state.priority_keys:
-            answer_callback_query(config.bot_token, callback_id, text="Выберите хотя бы одну программу")
-            return
-        from src.telegram_users import robot_config_path
-
-        save_priority_keys(state.university, state.priority_keys, path=robot_config_path(chat_id))
-        clear_priority_session(chat_id, state.university)
-        from src.robot.telegram_priorities import build_priority_view_keyboard
-
-        edit_message_text(
-            config.bot_token,
-            chat_id,
-            message_id,
-            format_saved_confirmation(state),
-            reply_markup=build_priority_view_keyboard(),
-        )
-        answer_callback_query(config.bot_token, callback_id, text="Сохранено")
-        return
-
-    if op == "cancel":
-        clear_priority_session(chat_id, state.university)
-        state = load_priority_editor(chat_id, university=state.university)
-        from src.robot.telegram_priorities import build_priority_view_keyboard
-
-        edit_message_text(
-            config.bot_token,
-            chat_id,
-            message_id,
-            format_priority_view(state, editing=False),
-            reply_markup=build_priority_view_keyboard(),
-        )
-        answer_callback_query(config.bot_token, callback_id, text="Отменено")
-        return
-
-    answer_callback_query(config.bot_token, callback_id)
-
-
 def _handle_callback(config, callback_query: dict) -> None:
     callback_id = callback_query["id"]
-    data = callback_query.get("data") or ""
     message = callback_query.get("message") or {}
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
@@ -366,10 +188,6 @@ def _handle_callback(config, callback_query: dict) -> None:
 
     if not is_registered(chat_id):
         answer_callback_query(config.bot_token, callback_id, text="Сначала зарегистрируйтесь")
-        return
-
-    if data.startswith("prio:"):
-        _handle_priority_callback(config, callback_query)
         return
 
     # Клавиатура меню старого /статус (menu:back, uni:...) — эти callback'и
@@ -487,11 +305,10 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
 
     if command == "/статус":
         try:
-            from src.robot.priorities import get_saved_priority_keys
             from src.robot.refresh_worker import get_refresh_worker
             from src.robot.simulator import run_robot_simulation
             from src.robot.universities import SUPPORTED_UNIVERSITIES, is_pool_stale, robot_ready_universities
-            from src.telegram_users import build_robot_settings, get_user_code, robot_config_path
+            from src.telegram_users import build_robot_settings, get_user_code
 
             code = get_user_code(chat_id)
             worker = get_refresh_worker()
@@ -499,10 +316,9 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             stale_any = False
             for university in sorted(robot_ready_universities()):
                 settings = build_robot_settings(code, university)
-                priority_ids = get_saved_priority_keys(university, path=robot_config_path(chat_id))
                 # stale_ok=True: читаем кэш и отвечаем мгновенно. Сетевая пересборка
                 # здесь подвесила бы цикл getUpdates для всех чатов сразу.
-                result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
+                result = run_robot_simulation(university, settings=settings, stale_ok=True)
                 results.append((university, result))
                 # config_error (вуз выключен/не поддерживается/нет программ в
                 # конфиге) — пул в этом случае вообще не читался, fetched_at
@@ -521,7 +337,6 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
         parts = text.strip().split()
         try:
             from src.robot.format import format_robot_cache_refresh, format_robot_result
-            from src.robot.priorities import get_saved_priority_keys
             from src.robot.simulator import run_robot_simulation
             from src.robot.universities import SUPPORTED_UNIVERSITIES, parse_robot_command
 
@@ -601,7 +416,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 )
                 return
 
-            from src.telegram_users import build_robot_settings, get_user_code, robot_config_path
+            from src.telegram_users import build_robot_settings, get_user_code
 
             code = get_user_code(chat_id)
             if not code:
@@ -612,8 +427,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             from src.robot.universities import is_pool_stale
 
             settings = build_robot_settings(code, university)
-            priority_ids = get_saved_priority_keys(university, path=robot_config_path(chat_id))
-            result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
+            result = run_robot_simulation(university, settings=settings, stale_ok=True)
             send_long_message(config.bot_token, chat_id, format_robot_result(result), reply_to=message_id)
             # config_error (вуз отключён/нет программ в конфиге) — пул вообще
             # не читался, fetched_at пуст всегда, is_pool_stale() был бы True
@@ -630,7 +444,6 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
         parts = text.strip().split()
         try:
             from src.robot.format import format_competitors
-            from src.robot.priorities import get_saved_priority_keys
             from src.robot.refresh_worker import get_refresh_worker
             from src.robot.simulator import run_robot_simulation
             from src.robot.universities import SUPPORTED_UNIVERSITIES, is_pool_stale, match_university_prefix
@@ -667,7 +480,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 return
             priority_number = int(rest[0])
 
-            from src.telegram_users import build_robot_settings, get_user_code, robot_config_path
+            from src.telegram_users import build_robot_settings, get_user_code
 
             code = get_user_code(chat_id)
             if not code:
@@ -675,8 +488,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 return
 
             settings = build_robot_settings(code, university)
-            priority_ids = get_saved_priority_keys(university, path=robot_config_path(chat_id))
-            result = run_robot_simulation(university, settings=settings, stale_ok=True, priority_ids=priority_ids)
+            result = run_robot_simulation(university, settings=settings, stale_ok=True)
             send_long_message(config.bot_token, chat_id, format_competitors(result, priority_number), reply_to=message_id)
             # См. аналогичный комментарий в /робот выше: config_error не
             # должен заказывать сетевую пересборку.
@@ -685,72 +497,6 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
         except Exception as exc:  # noqa: BLE001
             logger.exception("Competitors lookup failed: %s", exc)
             send_message(config.bot_token, chat_id, f"Ошибка:\n{exc}", reply_to=message_id)
-        return
-
-    if command in {"/приоритет", "/приоритеты", "/priority"}:
-        parts = text.strip().split()
-        try:
-            from src.robot.priorities import save_priority_keys
-            from src.robot.telegram_priorities import (
-                PriorityEditorState,
-                clear_priority_session,
-                format_saved_confirmation,
-                load_priority_editor,
-                try_parse_priority_command,
-            )
-            from src.robot.universities import SUPPORTED_UNIVERSITIES, parse_university_arg
-
-            university = parse_university_arg(parts, default="МИРЭА") or "МИРЭА"
-            if SUPPORTED_UNIVERSITIES.get(university) is None:
-                send_message(
-                    config.bot_token,
-                    chat_id,
-                    f"Робот не поддерживает «{university}». Доступно: {', '.join(sorted(SUPPORTED_UNIVERSITIES))}",
-                    reply_to=message_id,
-                )
-                return
-
-            from src.telegram_users import robot_config_path
-
-            parsed = try_parse_priority_command(
-                text,
-                chat_id,
-                default_university=university,
-                supported_universities=set(SUPPORTED_UNIVERSITIES),
-            )
-            if parsed is not None:
-                parsed_university, priority_keys = parsed
-                if priority_keys:
-                    save_priority_keys(parsed_university, priority_keys, path=robot_config_path(chat_id))
-                    # Без сброса: если у пользователя открыт редактор (кнопки
-                    # /приоритет), следующий клик по tog/up/dn/save грузит
-                    # ЗАМОРОЖЕННЫЙ на момент открытия черновик — из-за него
-                    # клик перезаписал бы только что сохранённый здесь
-                    # результат старым draft'ом. Ручное сохранение должно
-                    # закрывать открытую сессию редактора, как и клавиатурные
-                    # save/cancel (см. _handle_priority_callback).
-                    clear_priority_session(chat_id, parsed_university)
-                    state = load_priority_editor(chat_id, university=parsed_university)
-                    saved_state = PriorityEditorState(
-                        university=parsed_university,
-                        parser=state.parser,
-                        priority_keys=priority_keys,
-                        options=state.options,
-                    )
-                    send_message(
-                        config.bot_token,
-                        chat_id,
-                        format_saved_confirmation(saved_state),
-                        reply_to=message_id,
-                    )
-                    return
-
-            _send_priority_view(config, chat_id, university, reply_to=message_id)
-        except ValueError as exc:
-            send_message(config.bot_token, chat_id, f"Ошибка приоритетов: {exc}", reply_to=message_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Priority editor failed: %s", exc)
-            send_message(config.bot_token, chat_id, f"Ошибка: {exc}", reply_to=message_id)
         return
 
     send_message(config.bot_token, chat_id, "Неизвестная команда. Напишите /help", reply_to=message_id)

@@ -10,8 +10,7 @@
   "universities": {
     "Финансовый университет": {
       "enabled": true,
-      "dima_list_code": "1181867",
-      "dima_priorities": [54, 13, 78, 42]
+      "dima_list_code": "1181867"
     },
     "МЭИ": {
       "enabled": true,
@@ -19,8 +18,7 @@
     },
     "МИРЭА": {
       "enabled": true,
-      "dima_list_code": "1824102",
-      "dima_priorities": [48, 16, 28, 20, 24, 8, 46, 10, 12, 17, 50, 53, 41]
+      "dima_list_code": "1824102"
     },
     "СТАНКИН": {
       "enabled": true,
