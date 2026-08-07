@@ -67,17 +67,20 @@ def _title_for_key(programs: list[RobotProgram], key: str | None) -> str | None:
 
 
 def _priority_keys(person: RobotPerson | None) -> list[str]:
-    """Ключи направлений в порядке приоритета (без дублей)."""
+    """Ключи направлений в порядке приоритета (без дублей).
+
+    Раньше шла по person.choices напрямую, без фильтра enrolls_elsewhere —
+    в отличие от RobotPerson.ordered_program_keys(), по которому считает
+    каскад. Из-за этого _site_placement мог поселить Диму на направление,
+    откуда сайт его уже вычеркнул пометкой «Исключен (зачислен на другой
+    конкурс)»: choice остаётся в person.choices ради отображения (см.
+    комментарий у ProgramChoice.enrolls_elsewhere), но каскад туда не
+    сажает — оракул сверки не должен туда селить тоже. Учёт пометки здесь,
+    в СВЕРКЕ (не на входе каскада), круговизны не создаёт — она и есть
+    вердикт сайта о человеке, которым сверка и оперирует."""
     if person is None:
         return []
-    seen: set[str] = set()
-    keys: list[str] = []
-    for choice in sorted(person.choices, key=lambda item: item.priority):
-        if choice.program_key in seen:
-            continue
-        seen.add(choice.program_key)
-        keys.append(choice.program_key)
-    return keys
+    return person.ordered_program_keys()
 
 
 def _build_seat_checks(
