@@ -64,6 +64,34 @@ def main() -> int:
         print(f"Робот пока не поддерживает вуз «{university}»", file=sys.stderr)
         return 1
 
+    settings = load_robot_config()
+    university_cfg = settings.universities.get(university, {})
+    # dima_list_code включает «настоящий» путь (_resolve_dima_person в
+    # simulator.py): направления и их порядок берутся из живого конкурсного
+    # списка человека, а порядок приоритетов — это ключи RobotProgram.key
+    # (см. _apply_priority_order), а не числовые id config/programs.json.
+    # Все флаги ниже (--list-programs/--set-priorities/--priorities) работают
+    # только с config-id — для такого вуза они молча ничего не делают: id и
+    # ключ пула никогда не совпадут (int никогда не равен str), симуляция
+    # тихо идёт по естественному порядку сайта, а отчёт печатается как ни в
+    # чём не бывало. Переводить эти команды на ключи пула — за рамками
+    # минимальной починки (нужен отдельный live-запрос по коду, как в
+    # telegram_priorities.load_priority_editor), поэтому падаем с понятной
+    # ошибкой вместо вранья.
+    if university_cfg.get("dima_list_code") and (
+        args.list_programs or args.set_priorities or args.priorities
+    ):
+        print(
+            f"«{university}»: порядок приоритетов задаётся ключами направлений "
+            "пула (реальный конкурсный список по dima_list_code), а не id "
+            "config/programs.json — --list-programs/--set-priorities/--priorities "
+            "здесь не применимы. Отредактируйте dima_priorities в config/robot.json "
+            "вручную ключами направлений (RobotProgram.key) либо через "
+            "/приоритет в Telegram-боте.",
+            file=sys.stderr,
+        )
+        return 1
+
     if args.list_programs:
         saved = get_saved_priority_keys(university)
         print(format_program_list(university, parser_name, saved))
@@ -93,7 +121,6 @@ def main() -> int:
             print(format_program_list(university, parser_name))
             return 1
 
-    settings = load_robot_config()
     result = run_robot_simulation(
         university,
         settings,
