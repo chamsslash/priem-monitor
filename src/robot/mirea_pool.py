@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -154,6 +155,7 @@ class MireaFullPool:
                     score=int(item["score"]),
                     consent=bool(item["consent"]),
                     is_bvi=bool(item.get("is_bvi")),
+                    enrolled_key=item.get("enrolled_key"),
                     choices=[ProgramChoice(**choice) for choice in item.get("choices", [])],
                 )
                 for item in payload.get("people", [])
@@ -180,6 +182,7 @@ class MireaFullPool:
                     "score": person.score,
                     "consent": person.consent,
                     "is_bvi": person.is_bvi,
+                    "enrolled_key": person.enrolled_key,
                     "choices": [asdict(choice) for choice in person.choices],
                 }
                 for person in people
@@ -381,7 +384,37 @@ class MireaFullPool:
                 person.consent = person.consent or consent
                 person.choices.append(choice)
                 person.is_bvi = person.has_bvi_choice()
+        MireaFullPool._retire_enrolled(people.values())
         return list(people.values())
+
+    @staticmethod
+    def _retire_enrolled(people: Iterable[RobotPerson]) -> None:
+        """Убрать уже зачисленных из борьбы за оставшиеся места.
+
+        `plan` из competitions_api — это ОСТАТОК мест, а не полный КЦП: по 32
+        бюджетным конкурсам он суммарно равен 49 при 924 уже зачисленных, и
+        сами конкурсы помечены `isFinal: true`. Место зачисленного из этого
+        остатка уже вычтено, поэтому в каскаде он не конкурент — иначе он
+        занимает место второй раз и вытесняет тех, кто на него реально
+        претендует. Ровно эта правка уже сделана для Политеха, где зачисленных
+        выдаёт приказ (см. polytech_pool._mark_enrolled).
+
+        В отличие от Политеха, МИРЭА оставляет зачисленного в списке его же
+        направления со статусом «Зачислен», поэтому гасить нужно ВСЕ его
+        выборы, включая тот, куда он поступил. Факт зачисления при этом не
+        теряется: он переезжает на `enrolled_key`, откуда его и читает сверка
+        (`verification.published_cutoffs`) — `ordered_program_keys()` погашенные
+        выборы не отдаёт, и искать отметку по ним уже нельзя.
+        """
+        for person in people:
+            enrolled_key = next(
+                (choice.program_key for choice in person.choices if choice.enrolled), None
+            )
+            if enrolled_key is None:
+                continue
+            person.enrolled_key = enrolled_key
+            for choice in person.choices:
+                choice.enrolls_elsewhere = True
 
     def _build_programs(self, catalog: list[MireaCompetition]) -> list[RobotProgram]:
         tracked = _tracked_comp_map()

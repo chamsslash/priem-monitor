@@ -226,7 +226,16 @@ def _simulate_two_phase(
                 dima_priority_used = priority
                 dima_placed_via = "bvi"
 
-    exam_candidates = [person for person in participants if person.code not in placed_codes and person.score > 0]
+    # Без единого живого выбора человек не может занять НИЧЕГО: все его выборы
+    # погашены как «уже зачислен» (МИРЭА, Политех — их места из остатка вуз уже
+    # вычел) либо как «зачисляется в другой КГ» (МЭИ). В очередь такие не идут:
+    # `_try_place` всё равно вернёт им None, а вот в «перед вами N человек» они
+    # попадали и раздували число конкурентов — у МИРЭА на 465 из 1403.
+    exam_candidates = [
+        person
+        for person in participants
+        if person.code not in placed_codes and person.score > 0 and person.ordered_program_keys()
+    ]
     exam_queue = sorted(exam_candidates, key=lambda person: (-person.score, person.code))
 
     dima_eligible = (not require_consent or dima.consent) and dima.code not in placed_codes
@@ -287,11 +296,16 @@ def _simulate_two_phase(
         seen_user_keys.add(choice.program_key)
         user_program_keys.append(choice.program_key)
     user_states = [states[key] for key in user_program_keys if key in states]
+    # «В очереди» — те, кто реально борется за места: у кого остался хоть один
+    # незанятый выбор. Раньше считались все согласные подряд, включая уже
+    # зачисленных (у МИРЭА их 924 из 5357), и общее число не сходилось с суммой
+    # «БВИ + ЕГЭ», по которой очередь и проходит.
+    contenders = [person for person in participants if person.ordered_program_keys()]
     if dima_in_pool:
-        queue_size = len(participants)
+        queue_size = len(contenders)
         exam_people_count = len(exam_candidates)
     else:
-        queue_size = len(participants) + (1 if dima_eligible else 0)
+        queue_size = len(contenders) + (1 if dima_eligible else 0)
         exam_people_count = len(exam_candidates) + (1 if dima_eligible else 0)
 
     return RobotSimulationResult(
