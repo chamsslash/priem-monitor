@@ -33,10 +33,6 @@ _MIREA_PROXY = os.environ.get("MIREA_PROXY", "").strip()
 _PROXIES = {"http": _MIREA_PROXY, "https": _MIREA_PROXY} if _MIREA_PROXY else None
 
 POOL_SCOPE = "full"
-# Порог «кэш неполный, пересобрать». Считаем только бюджетные конкурсы, их 84
-# (до отсечения платных было 181, и порог стоял 150 — после фикса он отбраковывал
-# заведомо годный кэш). Берём с запасом вниз: вуз может закрыть часть направлений.
-MIN_CATALOG_PROGRAMS = 60
 CACHE_PATH = Path(__file__).resolve().parents[2] / "data" / "cache" / "mirea_robot_pool.json"
 CACHE_TTL_SEC = 7200
 CHUNK_SIZE = 3
@@ -94,7 +90,7 @@ class MireaFullPool:
     def build(self, *, use_cache: bool = True) -> tuple[list[RobotPerson], list[RobotProgram], str, bool]:
         if use_cache:
             cached = self._load_cache()
-            if cached is not None:
+            if cached is not None and self._cache_covers_catalog(cached[1]):
                 return cached
 
         try:
@@ -111,6 +107,32 @@ class MireaFullPool:
             if stale is not None:
                 return stale
             raise
+
+    @staticmethod
+    def _cache_covers_catalog(programs: list[RobotProgram]) -> bool:
+        """Полон ли кэш: конкурсов в нём не меньше, чем сейчас отдаёт каталог.
+
+        Пришло на смену абсолютному порогу MIN_CATALOG_PROGRAMS = 60. Тот
+        ставился, когда бюджетных конкурсов было 84, и протух, как только вуз
+        закрыл часть направлений после приказов: осталась 31 группа, условие
+        «31 < 60» стало истинным навсегда, и кэш отвергался на КАЖДОМ запросе.
+        При живом двухчасовом TTL МИРЭА пересобирался по сети каждый раз — в
+        логах по три полных пересборки за 3.5 минуты. Ошибка тихая: ничего не
+        роняет, просто делает лишнюю работу и выглядит как «что-то тормозит».
+
+        Сравнение с живым каталогом не протухает: сколько бы групп вуз ни
+        оставил, полный кэш содержит их все. Больше — нормально (кэш снят до
+        закрытия части направлений, за свежестью следит TTL); меньше — сборка
+        была усечена, и такой кэш отдавать нельзя.
+
+        Каталог недоступен — сверять не с чем, и кэш считаем годным: иначе
+        сетевой сбой обесценивал бы кэш ровно тогда, когда он и нужен.
+        """
+        try:
+            catalog = MireaFullPool._catalog_from_api()
+        except Exception:  # noqa: BLE001
+            return True
+        return len(programs) >= len(catalog)
 
     def _load_cache(
         self,
@@ -137,7 +159,11 @@ class MireaFullPool:
                 for item in payload.get("people", [])
             ]
             programs = [RobotProgram(**item) for item in payload.get("programs", [])]
-            if payload.get("pool_scope") != POOL_SCOPE or len(programs) < MIN_CATALOG_PROGRAMS:
+            # Полноту кэша здесь НЕ проверяем: она сверяется с живым каталогом
+            # (см. _cache_covers_catalog), а этот метод обязан работать офлайн —
+            # read_mirea_cached_pool() обещает «никогда не ходит в сеть», и на
+            # это обещание опираются code_lookup и refresh_worker.
+            if payload.get("pool_scope") != POOL_SCOPE:
                 return None
             return people, programs, fetched_at, True
         except (ValueError, KeyError, json.JSONDecodeError, TypeError):
