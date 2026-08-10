@@ -770,6 +770,7 @@ class PolytechFullPool:
 
         by_key = {program.key: program for program in programs}
         resolved: dict[tuple[str, str], str | None] = {}
+        taken: dict[str, int] = {}
         marked = unresolved = 0
         for person in people:
             entry = enrolled.get(person.code)
@@ -795,6 +796,29 @@ class PolytechFullPool:
                 f"зачисленные без указания направления. Сопоставлено: {marked}.",
                 file=sys.stderr,
             )
+
+        # Места в шапке — это места ОБЩЕГО КОНКУРСА целиком (КЦП минус квоты), а
+        # не остаток. После приказа часть из них занята, и разыгрывать их заново
+        # нельзя: вуз убирает зачисленного из списка его программы, поэтому
+        # каскад раздавал занятые места тем, кто остался. Замер до правки: мест
+        # 1988, зачислено приказом ровно 1988, свободных ноль — а робот селил
+        # человека на «Большие и открытые данные», откуда приказ его не называет.
+        # Считаем по ВСЕМ строкам приказа, а не только по тем зачисленным, кто
+        # ещё встречается в конкурсных списках: часть из них вуз убрал из списков
+        # полностью, и по людям их не сосчитать (1773 из 1988). Ниже нуля не
+        # опускаемся — отрицательных мест не бывает, а расхождение возможно при
+        # неполном сопоставлении строк приказа.
+        for entry in enrolled.values():
+            if entry not in resolved:
+                resolved[entry] = _enrolled_program_key(entry, by_key)
+            key = resolved[entry]
+            if key is not None:
+                taken[key] = taken.get(key, 0) + 1
+        for key, count in taken.items():
+            program = by_key.get(key)
+            if program is None or program.budget_places is None:
+                continue
+            program.budget_places = max(program.budget_places - count, 0)
 
     def _load_cache(self, *, ignore_ttl: bool = False):
         if not CACHE_PATH.exists():
