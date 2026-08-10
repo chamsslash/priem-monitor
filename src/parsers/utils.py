@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import base64
 import re
 from typing import Iterable
-from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -67,27 +65,3 @@ def parse_table_by_headers(soup: BeautifulSoup, mapping: dict[str, tuple[str, ..
         priority = to_int(cells[priority_idx]) if priority_idx is not None and priority_idx < len(cells) else 99
         applicants.append(Applicant(score=score, consent=consent, priority=priority or 99))
     return applicants
-
-
-def decode_mospolytech_qs(list_url: str) -> dict[str, str]:
-    query = parse_qs(urlparse(list_url).query)
-    raw = query.get("qs", [""])[0]
-    if not raw:
-        raise ValueError("В URL Московского политеха нет параметра qs")
-    padded = raw + "=" * (-len(raw) % 4)
-    parts = base64.b64decode(padded).decode("utf-8").split("|")
-    if len(parts) != 4:
-        raise ValueError(f"Неожиданный формат qs: {parts}")
-    return {
-        "select1": parts[0],
-        "specCode": parts[1],
-        "eduForm": parts[2],
-        "eduFin": parts[3],
-    }
-
-
-def extract_degree_id(list_url: str) -> str:
-    match = re.search(r"/degrees/(\d+)", list_url)
-    if not match:
-        raise ValueError("Не удалось определить id направления РУТ")
-    return match.group(1)
