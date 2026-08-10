@@ -147,6 +147,11 @@ def _published_placement(person: RobotPerson | None) -> tuple[bool, str | None]:
     """
     if person is None:
         return False, None
+    # Отметка на человеке (Политех — приказ о зачислении) главнее отметки на
+    # выборе: вуз убирает зачисленного из списка той программы, куда он поступил,
+    # и подходящего ProgramChoice у него уже нет.
+    if person.enrolled_key is not None:
+        return True, person.enrolled_key or None
     for key in person.ordered_program_keys():
         choice = next((item for item in person.choices if item.program_key == key), None)
         if choice is not None and choice.enrolled:
@@ -161,7 +166,9 @@ def _results_published(people: list[RobotPerson]) -> bool:
     нет. Проверяем по всей выборке, а не по одному человеку, иначе «этот не
     зачислен» было бы неотличимо от «вуз ещё ничего не публиковал».
     """
-    return any(choice.enrolled for person in people for choice in person.choices)
+    return any(person.enrolled_key is not None for person in people) or any(
+        choice.enrolled for person in people for choice in person.choices
+    )
 
 
 def _site_placement(

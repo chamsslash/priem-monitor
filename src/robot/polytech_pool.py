@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -11,6 +12,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from html import unescape
 from pathlib import Path
+from urllib.parse import urljoin
 
 import certifi
 import requests
@@ -513,6 +515,94 @@ def _tracked_by_spec() -> dict[str, ProgramConfig]:
     return mapping
 
 
+ORDERS_PAGE_URL = "https://mospolytech.ru/postupayushchim/priem-v-universitet/prikazi-o-zachislenii/"
+# Подпись ссылки на приказ по общему конкурсу. Рядом лежит второй файл — по
+# целевой/особой/отдельной квотам и БВИ; он про другие места и в модель не идёт.
+_ORDER_LINK_MARK = "зачисленных на бюджетную основу"
+_ORDER_FORM = "Очная"
+
+
+def _norm_profile(value: str) -> str:
+    return re.sub(r"[^а-яёa-z0-9]", "", (value or "").lower())
+
+
+def _enrollment_pdf_url() -> str:
+    """Ссылка на приказ о зачислении на бюджет — со страницы, а не захардкоженная:
+    в пути файла лежит хеш, который меняется при каждой перепубликации (тот же
+    приём, что у приказа о КЦП в fa_pool)."""
+    html = _request("GET", ORDERS_PAGE_URL).text
+    soup = BeautifulSoup(html, "lxml")
+    for link in soup.find_all("a", href=True):
+        text = " ".join(link.get_text(" ", strip=True).split()).lower()
+        if _ORDER_LINK_MARK in text and link["href"].lower().endswith(".pdf"):
+            return urljoin(ORDERS_PAGE_URL, link["href"])
+    raise ValueError(f"На {ORDERS_PAGE_URL} не найдена ссылка на приказ о зачислении на бюджет")
+
+
+def parse_enrollment_pdf(data: bytes) -> dict[str, tuple[str, str]]:
+    """Приказ → {уникальный код: (направление, профили)} по очной форме.
+
+    Колонка «Профиль» содержит СПИСОК профилей через «;»: Политех разыгрывает
+    укрупнённую конкурсную группу сразу на несколько профилей. Длинные списки
+    вуз обрезает многоточием, поэтому сопоставлять надо по частям и по префиксу,
+    а не по точному равенству строки.
+    """
+    import pdfplumber
+
+    enrolled: dict[str, tuple[str, str]] = {}
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        for page in pdf.pages:
+            for table in page.extract_tables() or []:
+                for cells in table:
+                    if not cells or len(cells) < 10:
+                        continue
+                    code = (cells[0] or "").strip()
+                    if not code.isdigit():
+                        continue
+                    if (cells[6] or "").strip() != _ORDER_FORM:
+                        continue
+                    direction = " ".join((cells[8] or "").split())
+                    profiles = " ".join((cells[9] or "").split())
+                    enrolled[code] = (direction, profiles)
+    if not enrolled:
+        raise ValueError("В приказе о зачислении Политеха не найдено ни одной строки очной формы")
+    return enrolled
+
+
+def fetch_enrolled() -> dict[str, tuple[str, str]]:
+    data = _request("GET", _enrollment_pdf_url(), timeout=300).content
+    return parse_enrollment_pdf(data)
+
+
+def _enrolled_program_key(
+    entry: tuple[str, str], programs_by_key: dict[str, RobotProgram]
+) -> str | None:
+    """Направление, на которое человек зачислён, по строке приказа.
+
+    Сначала пробуем профиль (точнее), затем — название направления: у части
+    строк приказа профиль пуст. Ничего не подошло → None, и это честнее догадки:
+    приписать человеку чужое направление хуже, чем не назвать его.
+    """
+    direction, profiles = entry
+    parts = [part.strip().rstrip(".") for part in profiles.split(";") if part.strip()]
+    for part in parts:
+        needle = _norm_profile(part)
+        if len(needle) < 8:
+            continue
+        for key, program in programs_by_key.items():
+            inner = re.search(r"\((.+)\)\s*$", program.title)
+            haystack = _norm_profile(inner.group(1) if inner else program.title)
+            if needle in haystack or haystack.startswith(needle[:24]):
+                return key
+    needle = _norm_profile(direction)
+    if len(needle) >= 8:
+        for key, program in programs_by_key.items():
+            head = re.sub(r"\s*\(.*$", "", program.title)
+            if _norm_profile(head) == needle:
+                return key
+    return None
+
+
 class PolytechFullPool:
     def build(self, *, use_cache: bool = True) -> tuple[list[RobotPerson], list[RobotProgram], str, bool]:
         if use_cache:
@@ -647,10 +737,64 @@ class PolytechFullPool:
                         code=row["code"], score=row["score"], consent=row["consent"], choices=[choice]
                     )
                     continue
-                person.score = max(person.score, row["score"])
+                person.score = max(person.score, row["score"])  # noqa: PLW2901
                 person.consent = person.consent or row["consent"]
                 person.choices.append(choice)
+
+        self._mark_enrolled(list(people.values()), programs)
         return list(people.values()), programs
+
+    @staticmethod
+    def _mark_enrolled(people: list[RobotPerson], programs: list[RobotProgram]) -> None:
+        """Проставить `ProgramChoice.enrolled` по приказу о зачислении.
+
+        Политех разыграл общий конкурс (приказ 4161-УД от 07.08.2026: 1988
+        зачисленных на очную бюджетную — ровно столько же, сколько мест общего
+        конкурса в шапках конкурсных списков). Колонка «Высший проходной
+        приоритет» при этом пустая, поэтому без приказа сверка слепа: робот
+        объявлял человека зачисленным туда, откуда приказ его не называет вовсе.
+
+        Сбой загрузки приказа НЕ роняет сборку: пул останется без отметок, и
+        сверка честно скажет «оракул недоступен» — как было до этой правки.
+        """
+        try:
+            enrolled = fetch_enrolled()
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"ВНИМАНИЕ: не удалось получить приказ о зачислении Политеха ({exc}) — "
+                "пул останется без отметок о зачислении, сверка прогноза будет "
+                "недоступна (места и конкурс не затронуты).",
+                file=sys.stderr,
+            )
+            return
+
+        by_key = {program.key: program for program in programs}
+        resolved: dict[tuple[str, str], str | None] = {}
+        marked = unresolved = 0
+        for person in people:
+            entry = enrolled.get(person.code)
+            if entry is None:
+                continue
+            if entry not in resolved:
+                resolved[entry] = _enrolled_program_key(entry, by_key)
+            key = resolved[entry]
+            # Пустая строка вместо None: «зачислен, но куда — не определили».
+            # Это принципиально разные ответы, и путать их нельзя.
+            person.enrolled_key = key if key is not None else ""
+            if key is None:
+                unresolved += 1
+            else:
+                marked += 1
+            choice = next((item for item in person.choices if item.program_key == key), None)
+            if choice is not None:
+                choice.enrolled = True
+        if unresolved:
+            print(
+                f"ВНИМАНИЕ: у {unresolved} зачисленных Политеха строка приказа не "
+                "сопоставилась ни с одним направлением каталога — они помечены как "
+                f"зачисленные без указания направления. Сопоставлено: {marked}.",
+                file=sys.stderr,
+            )
 
     def _load_cache(self, *, ignore_ttl: bool = False):
         if not CACHE_PATH.exists():
@@ -668,6 +812,7 @@ class PolytechFullPool:
                     score=int(item["score"]),
                     consent=bool(item["consent"]),
                     is_bvi=bool(item.get("is_bvi")),
+                    enrolled_key=item.get("enrolled_key"),
                     choices=[ProgramChoice(**choice) for choice in item.get("choices", [])],
                 )
                 for item in payload.get("people", [])
@@ -690,6 +835,7 @@ class PolytechFullPool:
                     "score": p.score,
                     "consent": p.consent,
                     "is_bvi": p.is_bvi,
+                    "enrolled_key": p.enrolled_key,
                     "choices": [asdict(c) for c in p.choices],
                 }
                 for p in people

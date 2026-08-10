@@ -30,6 +30,12 @@ class RobotPerson:
     consent: bool
     is_bvi: bool = False
     choices: list[ProgramChoice] = field(default_factory=list)
+    # Направление, на которое вуз ОФИЦИАЛЬНО зачислил человека (Политех — приказ
+    # о зачислении). Хранится на человеке, а не на выборе, потому что Политех
+    # убирает зачисленного из конкурсного списка той программы, куда он поступил:
+    # подходящего ProgramChoice у него уже нет. Пустая строка — зачислен, но
+    # направление по приказу не сопоставилось; None — не зачислен.
+    enrolled_key: str | None = None
 
     def ordered_program_keys(self, *, phase: str | None = None) -> list[str]:
         ordered = sorted(self.choices, key=lambda item: item.priority)
