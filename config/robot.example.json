@@ -14,7 +14,7 @@
     },
     "МЭИ": {
       "enabled": true,
-      "dima_priorities": [7, 22, 23, 35, 45]
+      "dima_list_code": "1824102"
     },
     "МИРЭА": {
       "enabled": true,
@@ -22,11 +22,11 @@
     },
     "СТАНКИН": {
       "enabled": true,
-      "dima_priorities": [33, 44, 47, 55, 56]
+      "dima_list_code": "1824102"
     },
     "Московский политех": {
       "enabled": true,
-      "dima_priorities": [40, 76, 26, 64, 57, 58, 71, 63, 65]
+      "dima_list_code": "1824102"
     }
   }
 }

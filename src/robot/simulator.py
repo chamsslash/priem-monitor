@@ -12,7 +12,6 @@ from .models import (
     DimaPrioritySnapshot,
     OptimisticOutlook,
     P1CompetitorHigherPriority,
-    ProgramChoice,
     ProgramState,
     QuotaTransfer,
     RobotPerson,
@@ -30,36 +29,6 @@ def _find_dima_in_pool(people: list[RobotPerson], list_code: str) -> RobotPerson
     return None
 
 
-def _build_dima_person(
-    settings: RobotSettings,
-    university_cfg: dict,
-    tracked_programs: list[ProgramConfig],
-) -> RobotPerson:
-    # Легаси-путь: вуз без dima_list_code в конфиге (сейчас — только Московский
-    # политех при запуске без реального кода поступающего) — порядок задаётся
-    # напрямую в config/robot.json числовыми id config/programs.json.
-    selected_ids = [int(item) for item in university_cfg.get("dima_priorities", [])]
-
-    tracked_by_id = {program.id: program for program in tracked_programs}
-    choices: list[ProgramChoice] = []
-    for index, program_id in enumerate(selected_ids):
-        program = tracked_by_id.get(program_id)
-        if program is None:
-            continue
-        choices.append(
-            ProgramChoice(program_key=direction_key_for_program(program), priority=index + 1)
-        )
-    if not choices:
-        raise ValueError("Не заданы приоритеты: укажите dima_priorities в config/robot.json")
-    return RobotPerson(
-        code=settings.dima_code,
-        score=settings.dima_score,
-        consent=settings.dima_consent,
-        is_bvi=False,
-        choices=choices,
-    )
-
-
 def _resolve_dima_person(
     settings: RobotSettings,
     university_cfg: dict,
@@ -67,29 +36,27 @@ def _resolve_dima_person(
     people: list[RobotPerson],
 ) -> tuple[RobotPerson, bool]:
     list_code = university_cfg.get("dima_list_code")
-    if list_code:
-        found = _find_dima_in_pool(people, str(list_code))
-        if found is None:
-            raise ValueError(f"Дима ({list_code}) не найден в списках вуза")
-        # Раньше здесь выборы урезались до config/programs.json
-        # (_filter_choices_to_tracked). Теперь показываем специальности как они
-        # есть в конкурсном списке — конфиг больше не сужает набор направлений.
-        # Порядок приоритетов — это порядок choices ИЗ ПУЛА, ровно как человек
-        # сам подал их на сайте вуза: раньше здесь ещё накладывался сохранённый
-        # ручной порядок (config dima_priorities / телеграм-редактор), теперь
-        # эта настройка снята целиком — настоящий порядок и так настоящий, его
-        # незачем перетасовывать. consent берём из настроек, а не из пула — это
-        # уже существующее поведение симулятора (см. комментарий в
-        # telegram_users.build_robot_settings), а не новое.
-        dima = RobotPerson(
-            code=found.code,
-            score=found.score,
-            consent=settings.dima_consent,
-            is_bvi=found.is_bvi,
-            choices=found.choices,
-        )
-        return dima, True
-    return _build_dima_person(settings, university_cfg, tracked_programs), False
+    found = _find_dima_in_pool(people, str(list_code))
+    if found is None:
+        raise ValueError(f"Дима ({list_code}) не найден в списках вуза")
+    # Раньше здесь выборы урезались до config/programs.json
+    # (_filter_choices_to_tracked). Теперь показываем специальности как они
+    # есть в конкурсном списке — конфиг больше не сужает набор направлений.
+    # Порядок приоритетов — это порядок choices ИЗ ПУЛА, ровно как человек
+    # сам подал их на сайте вуза: раньше здесь ещё накладывался сохранённый
+    # ручной порядок (список приоритетов в config/robot.json / телеграм-редактор),
+    # теперь эта настройка снята целиком — настоящий порядок и так настоящий, его
+    # незачем перетасовывать. consent берём из настроек, а не из пула — это
+    # уже существующее поведение симулятора (см. комментарий в
+    # telegram_users.build_robot_settings), а не новое.
+    dima = RobotPerson(
+        code=found.code,
+        score=found.score,
+        consent=settings.dima_consent,
+        is_bvi=found.is_bvi,
+        choices=found.choices,
+    )
+    return dima, True
 
 
 def _priority_on_program(person: RobotPerson, program_key: str) -> int:
