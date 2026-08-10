@@ -21,6 +21,18 @@ from .direction_keys import fa_list_title
 from .models import ProgramChoice, RobotPerson, RobotProgram
 
 LIST_URL = "https://www.fa.ru/spiski/listabit.php"
+# «Сведения о зачисленных» — таблица, встроенная iframe'ом в официальную
+# страницу приказов /for-applicants/bachelor/prikaz/. Печатных приказов ФА не
+# публикует вовсе (п. 90 Правил приёма: сведения о зачислении размещаются без
+# ФИО, по уникальному коду, в табличной форме), так что это и есть приказ.
+# type_list!=квот — тот же фильтр, с которым таблица встроена на страницу.
+ORDERS_URL = "https://www.fa.ru/spiski/list_students.php"
+ORDERS_PARAMS = {"type_list!": "квот"}
+# Колонки таблицы приказов (замер 10.08.2026): уникальный код, номер приказа,
+# дата, факультет/филиал, конкурсная группа, вид конкурса, без ВИ, сумма
+# конкурсных баллов, баллы за ВИ, баллы за ИД.
+ORDERS_COLUMNS = 10
+ORDERS_GENERAL_COMPETITION = "Общий конкурс"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 # Ровно те параметры, с которыми listabit.php встроен на официальную страницу
 # конкурсных списков бакалавриата (/for-applicants/bachelor/Rateabit/applications.php).
@@ -240,6 +252,87 @@ def fetch_kcp_places() -> dict[str, int]:
 _thread_local = threading.local()
 
 
+def _orders_rows(html: str) -> list[list[str]]:
+    body = re.search(r"(?s)<tbody.*?</tbody>", html)
+    if not body:
+        return []
+    rows: list[list[str]] = []
+    for row_html in re.findall(r"(?s)<tr[^>]*>(.*?)</tr>", body.group(0)):
+        cells = [
+            re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", cell)).strip()
+            for cell in re.findall(r"(?s)<td[^>]*>(.*?)</td>", row_html)
+        ]
+        if len(cells) >= ORDERS_COLUMNS:
+            rows.append(cells)
+    return rows
+
+
+def _enrolled_key(program_cell: str, keys: set[str]) -> str | None:
+    """Ключ направления по строке приказа.
+
+    В приказе то же название, что и в конкурсном списке, но с приписанным
+    спереди факультетом: «Факультет ИТ…, Прикладная информатика, Бакалавр, …,
+    Очная». Сопоставляем ТОЧНЫМ суффиксом, а не по похожести: приписать чужому
+    направлению чужой проходной балл здесь дороже, чем не сопоставить вовсе.
+    """
+    matches = [key for key in keys if program_cell.endswith(f", {key}") or program_cell == key]
+    return matches[0] if len(matches) == 1 else None
+
+
+def fetch_enrolled_cutoffs(keys: set[str], *, session: requests.Session | None = None) -> dict[str, int]:
+    """Минимальный балл среди зачисленных по ОБЩЕМУ КОНКУРСУ, по направлениям.
+
+    Это ответ на вопрос «прошёл бы я, если бы подал согласие»: балл выше или
+    равный этому минимуму и означает, что человек попал бы в приказ. Берётся из
+    самих строк приказа («Сумма конкурсных баллов»), а не из конкурсных списков:
+    вуз убирает часть зачисленных из списков, и считать минимум по видимым
+    значило бы завышать порог.
+
+    Берём только «Общий конкурс»: олимпиадников (БВИ) вуз зачисляет вне
+    конкурса баллов, и их балл порогом не является. Квотные виды конкурса
+    отсечены самим источником (type_list!=квот) и на всякий случай фильтром.
+    Только московские очные строки: филиалы и очно-заочные — другой конкурс,
+    робот их не моделирует.
+    """
+    session = session or _session()
+    scores: dict[str, list[int]] = {}
+    page = 1
+    pages = 1
+    while page <= pages:
+        params = {**ORDERS_PARAMS, "page": page, "page_size": PAGE_SIZE}
+        response = session.get(ORDERS_URL, params=params, timeout=90)
+        response.raise_for_status()
+        response.encoding = response.apparent_encoding
+        html = response.text
+        if page == 1:
+            total = re.search(r"total:\s*(\d+)", html)
+            if total is None:
+                raise ValueError(
+                    "В ответе таблицы зачисленных ФА нет поля total — сайт мог "
+                    "поменять вёрстку list_students.php. Считать по одной "
+                    "странице нельзя: порог вышел бы завышенным и молча."
+                )
+            pages = (int(total.group(1)) + PAGE_SIZE - 1) // PAGE_SIZE
+        for cells in _orders_rows(html):
+            faculty, program, competition = cells[3], cells[4], cells[5]
+            if "филиал" in faculty.lower():
+                continue
+            if competition != ORDERS_GENERAL_COMPETITION:
+                continue
+            if program.rsplit(",", 1)[-1].strip() != "Очная":
+                continue
+            key = _enrolled_key(program, keys)
+            if key is None:
+                continue
+            score = to_int(cells[7].split(".")[0])
+            if score:
+                scores.setdefault(key, []).append(score)
+        page += 1
+    if not scores:
+        raise ValueError("В таблице зачисленных ФА нет ни одной строки общего конкурса")
+    return {key: min(values) for key, values in scores.items()}
+
+
 def _session() -> requests.Session:
     """Thread-local Session: каждый воркер-поток переиспользует своё соединение
     (без нового TCP+TLS на каждую страницу). Своя сессия на поток → потокобезопасно."""
@@ -302,6 +395,7 @@ class FaFullPool:
             rows = self._fetch_all_rows(catalog)
             people = self._merge_people(rows)
             programs = self._build_programs(catalog, self._site_verdict(rows), self._safe_kcp())
+            self._apply_enrolled_cutoffs(programs)
             fetched_at = datetime.now(timezone.utc).isoformat()
             self._save_cache(people, programs, fetched_at)
             return people, programs, fetched_at, False
@@ -310,6 +404,36 @@ class FaFullPool:
             if stale is not None:
                 return stale
             raise
+
+    @staticmethod
+    def _apply_enrolled_cutoffs(programs: list[RobotProgram]) -> None:
+        """Проставить порог по зачисленным. Сбой приказа сборку НЕ роняет.
+
+        Приказ — отдельный источник рядом с конкурсными списками: без него пул
+        остаётся ровно таким, каким был, и сверка честно откатывается на
+        отметку сайта «Высший проходной приоритет». Ронять из-за него сборку
+        всего вуза нельзя — это стоило бы всех остальных данных.
+        """
+        keys = {program.key for program in programs}
+        try:
+            cutoffs = fetch_enrolled_cutoffs(keys)
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"ВНИМАНИЕ: не удалось прочитать таблицу зачисленных ФА ({exc}) — "
+                "порог по зачисленным не проставлен, сверка пойдёт по отметке "
+                "сайта о проходящих (места и конкурс не затронуты).",
+                file=sys.stderr,
+            )
+            return
+        for program in programs:
+            program.enrolled_cutoff = cutoffs.get(program.key)
+        missing = len(keys) - len(cutoffs)
+        if missing:
+            print(
+                f"ВНИМАНИЕ: {missing} из {len(keys)} программ ФА не встретились в "
+                "таблице зачисленных — по ним порога по зачисленным не будет.",
+                file=sys.stderr,
+            )
 
     def _load_cache(
         self,

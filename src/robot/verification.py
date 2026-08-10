@@ -159,7 +159,9 @@ def _published_placement(person: RobotPerson | None) -> tuple[bool, str | None]:
     return False, None
 
 
-def published_cutoffs(people: list[RobotPerson]) -> dict[str, int]:
+def published_cutoffs(
+    people: list[RobotPerson], programs: list[RobotProgram] | None = None
+) -> dict[str, int]:
     """Проходной балл по каждому направлению, выведенный из СПИСКА ЗАЧИСЛЕННЫХ.
 
     Это минимальный балл среди тех, кого вуз уже зачислил сюда. Отвечает не на
@@ -180,6 +182,10 @@ def published_cutoffs(people: list[RobotPerson]) -> dict[str, int]:
     БВИ-шники в расчёт не идут: их зачисляют вне конкурса баллов, и их балл
     порогом не является — один олимпиадник со скромным ЕГЭ обвалил бы планку
     для всех.
+
+    Там, где вуз публикует приказ вместе с баллами (ФА), порог считает сам пул
+    и кладёт в `RobotProgram.enrolled_cutoff` — он точнее и приходит прямо из
+    приказа, поэтому перебивает счёт по людям.
     """
     scores: dict[str, list[int]] = {}
     for person in people:
@@ -189,16 +195,24 @@ def published_cutoffs(people: list[RobotPerson]) -> dict[str, int]:
         if not published or key is None:
             continue
         scores.setdefault(key, []).append(person.score)
-    return {key: min(values) for key, values in scores.items() if values}
+    cutoffs = {key: min(values) for key, values in scores.items() if values}
+    for program in programs or []:
+        if program.enrolled_cutoff is not None:
+            cutoffs[program.key] = program.enrolled_cutoff
+    return cutoffs
 
 
-def _results_published(people: list[RobotPerson]) -> bool:
+def _results_published(people: list[RobotPerson], programs: list[RobotProgram]) -> bool:
     """Перешёл ли вуз к публикации поимённых результатов зачисления.
 
     Одной отметки по вузу достаточно: список зачисленных либо публикуется, либо
     нет. Проверяем по всей выборке, а не по одному человеку, иначе «этот не
-    зачислен» было бы неотличимо от «вуз ещё ничего не публиковал».
+    зачислен» было бы неотличимо от «вуз ещё ничего не публиковал». У ФА
+    отметок на людях нет вовсе — там признак это порог, посчитанный пулом прямо
+    из приказа.
     """
+    if any(program.enrolled_cutoff is not None for program in programs):
+        return True
     return any(person.enrolled_key is not None for person in people) or any(
         choice.enrolled for person in people for choice in person.choices
     )
@@ -247,8 +261,8 @@ def _build_placement_check(
     # автоматически считался бы ошибкой. Вопрос ставится так же, как везде в
     # роботе: как будто согласие подано. Отсюда порог — минимальный балл среди
     # зачисленных (см. published_cutoffs), а дальше обычный обход приоритетов.
-    if _results_published(people):
-        published: dict[str, int | None] = dict(published_cutoffs(people))
+    if _results_published(people, programs):
+        published: dict[str, int | None] = dict(published_cutoffs(people, programs))
         site_key = _walk_priorities(published, sim_dima, result.dima_score)
         cutoff = published.get(site_key) if site_key is not None else None
         if robot_key == site_key:

@@ -571,7 +571,7 @@ def run_robot_simulation(
     # колонке «Высший проходной приоритет»: она к этому моменту обычно снята
     # (все нули), и строки приоритетов печатали бы «любой балл ✅». Тот же
     # порог стоит в вердикте ниже — числа в одном сообщении должны совпадать.
-    site_cutoffs.update(published_cutoffs(people))
+    site_cutoffs.update(published_cutoffs(people, programs))
     for snapshot in result.dima_remaining_at_turn:
         snapshot.site_cutoff = site_cutoffs.get(snapshot.program_key)
 
