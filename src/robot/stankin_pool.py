@@ -358,6 +358,10 @@ CACHE_TTL_SEC = 7200
 # fetch_direction_rows: он перекачивает направление и валит сборку, если обрыв
 # повторяется, чтобы откатиться на прошлый кэш вместо записи неполного пула.
 MAX_WORKERS = 8
+# Доля прошлого пула, ниже которой новый датасет считаем обрезанным и кэш не
+# перезаписываем (см. _guard_shrink). 0.7 с запасом: живой отток абитуриентов
+# между волнами измеряется процентами, а троттлинг рубил больше половины.
+MIN_KEEP_FRACTION = 0.7
 UNTRACKED_FALLBACK_PLACES = 30  # аппроксимация мест ТОЛЬКО для непрофильных untracked-программ каскада (вне охвата гарантии реальных мест)
 # Реальные места ОБЩЕГО КОНКУРСА («Основной бюджет») по отслеживаемым конкурсным
 # группам. Источник — официальная страница ranked-lists priem.stankin.ru,
@@ -409,6 +413,7 @@ class StankinFullPool:
         try:
             catalog = fetch_catalog()
             people, programs = self._fetch_all(catalog)
+            self._guard_shrink(people)
             fetched_at = datetime.now(timezone.utc).isoformat()
             self._save_cache(people, programs, fetched_at)
             return people, programs, fetched_at, False
@@ -417,6 +422,31 @@ class StankinFullPool:
             if stale is not None:
                 return stale
             raise
+
+    def _guard_shrink(self, people: list[RobotPerson]) -> None:
+        """Не давать заметно меньшему датасету затереть кэш.
+
+        `_looks_truncated` ловит только обрыв пагинации НА ПОЛНОЙ странице, а
+        10.08.2026 кэш всё равно сохранился усечённым: 3681 человек вместо 8170,
+        и по направлению было 1160 строк против 2850 живьём. Код в таком кэше не
+        находился вовсе — робот отвечал «вас нет в списках вуза». Ошибка тихая:
+        сборка отработала без исключений, а данные оказались половинными.
+
+        Порог по людям, а не по направлениям: направления могли остаться все, но
+        с обрезанными списками — как раз тот случай. Исключение возвращает build
+        на прошлый кэш: устаревшие данные честнее половинных.
+        """
+        previous = self._load_cache(ignore_ttl=True)
+        if previous is None:
+            return
+        was = len(previous[0])
+        now = len(people)
+        if was and now < was * MIN_KEEP_FRACTION:
+            raise RuntimeError(
+                f"пул СТАНКИНа собрался вдвое меньше прошлого ({now} человек против "
+                f"{was}) — похоже на обрезанные троттлингом списки. Кэш не перезаписан, "
+                "работаем на прошлых данных: устаревшие честнее половинных"
+            )
 
     @staticmethod
     def _safe_kcp_places(directions: list[str]) -> dict[str, int]:
