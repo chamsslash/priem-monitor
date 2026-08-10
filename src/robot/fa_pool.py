@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,6 +33,7 @@ ORDERS_PARAMS = {"type_list!": "квот"}
 # конкурсных баллов, баллы за ВИ, баллы за ИД.
 ORDERS_COLUMNS = 10
 ORDERS_GENERAL_COMPETITION = "Общий конкурс"
+ORDERS_OLYMPIAD = "Победители и призеры профильных олимпиад"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 # Ровно те параметры, с которыми listabit.php встроен на официальную страницу
 # конкурсных списков бакалавриата (/for-applicants/bachelor/Rateabit/applications.php).
@@ -279,23 +280,30 @@ def _enrolled_key(program_cell: str, keys: set[str]) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def fetch_enrolled_cutoffs(keys: set[str], *, session: requests.Session | None = None) -> dict[str, int]:
-    """Минимальный балл среди зачисленных по ОБЩЕМУ КОНКУРСУ, по направлениям.
+@dataclass
+class FaEnrolled:
+    """Строка приказа о зачислении: кого, куда, по какому конкурсу и с каким баллом."""
 
-    Это ответ на вопрос «прошёл бы я, если бы подал согласие»: балл выше или
-    равный этому минимуму и означает, что человек попал бы в приказ. Берётся из
-    самих строк приказа («Сумма конкурсных баллов»), а не из конкурсных списков:
-    вуз убирает часть зачисленных из списков, и считать минимум по видимым
-    значило бы завышать порог.
+    code: str
+    program_key: str
+    competition: str
+    score: int
 
-    Берём только «Общий конкурс»: олимпиадников (БВИ) вуз зачисляет вне
-    конкурса баллов, и их балл порогом не является. Квотные виды конкурса
-    отсечены самим источником (type_list!=квот) и на всякий случай фильтром.
-    Только московские очные строки: филиалы и очно-заочные — другой конкурс,
-    робот их не моделирует.
+
+def fetch_enrolled(keys: set[str], *, session: requests.Session | None = None) -> list[FaEnrolled]:
+    """Приказ о зачислении: московские очные бюджетные строки.
+
+    Только Москва и только очная: филиалы и очно-заочные — другой конкурс,
+    робот их не моделирует, а места у нас московские (приказ о КЦП, секция
+    «Бакалавриат (очная форма обучения, г. Москва)»). Квотные виды конкурса
+    отсечены самим источником (type_list!=квот).
+
+    Направление сопоставляется ТОЧНЫМ суффиксом: в приказе то же название, что
+    и в конкурсном списке, но с приписанным спереди факультетом. Приписать
+    чужому направлению чужого человека здесь дороже, чем не сопоставить вовсе.
     """
     session = session or _session()
-    scores: dict[str, list[int]] = {}
+    result: list[FaEnrolled] = []
     page = 1
     pages = 1
     while page <= pages:
@@ -310,26 +318,50 @@ def fetch_enrolled_cutoffs(keys: set[str], *, session: requests.Session | None =
                 raise ValueError(
                     "В ответе таблицы зачисленных ФА нет поля total — сайт мог "
                     "поменять вёрстку list_students.php. Считать по одной "
-                    "странице нельзя: порог вышел бы завышенным и молча."
+                    "странице нельзя: и порог, и число занятых мест вышли бы "
+                    "неверными молча."
                 )
             pages = (int(total.group(1)) + PAGE_SIZE - 1) // PAGE_SIZE
         for cells in _orders_rows(html):
-            faculty, program, competition = cells[3], cells[4], cells[5]
+            code, faculty, program, competition = cells[0], cells[3], cells[4], cells[5]
             if "филиал" in faculty.lower():
-                continue
-            if competition != ORDERS_GENERAL_COMPETITION:
                 continue
             if program.rsplit(",", 1)[-1].strip() != "Очная":
                 continue
             key = _enrolled_key(program, keys)
-            if key is None:
+            if key is None or not code.strip():
                 continue
-            score = to_int(cells[7].split(".")[0])
-            if score:
-                scores.setdefault(key, []).append(score)
+            result.append(
+                FaEnrolled(
+                    code=code.strip(),
+                    program_key=key,
+                    competition=competition,
+                    score=to_int(cells[7].split(".")[0]) or 0,
+                )
+            )
         page += 1
-    if not scores:
-        raise ValueError("В таблице зачисленных ФА нет ни одной строки общего конкурса")
+    if not result:
+        raise ValueError("В таблице зачисленных ФА не разобралось ни одной строки")
+    return result
+
+
+def enrolled_cutoffs(enrolled: list[FaEnrolled]) -> dict[str, int]:
+    """Минимальный балл среди зачисленных по ОБЩЕМУ КОНКУРСУ, по направлениям.
+
+    Это ответ на вопрос «прошёл бы я, если бы подал согласие»: балл выше или
+    равный этому минимуму и означает, что человек попал бы в приказ. Берётся из
+    самих строк приказа, а не из конкурсных списков: вуз убирает часть
+    зачисленных из списков, и считать минимум по видимым значило бы завышать
+    порог.
+
+    Олимпиадники сюда не идут: их зачисляют вне конкурса баллов (у них в
+    приказе стоит сумма одних ИД — 3.00 и подобное), и порогом это не является.
+    """
+    scores: dict[str, list[int]] = {}
+    for item in enrolled:
+        if item.competition != ORDERS_GENERAL_COMPETITION or not item.score:
+            continue
+        scores.setdefault(item.program_key, []).append(item.score)
     return {key: min(values) for key, values in scores.items()}
 
 
@@ -395,7 +427,7 @@ class FaFullPool:
             rows = self._fetch_all_rows(catalog)
             people = self._merge_people(rows)
             programs = self._build_programs(catalog, self._site_verdict(rows), self._safe_kcp())
-            self._apply_enrolled_cutoffs(programs)
+            self._apply_orders(people, programs)
             fetched_at = datetime.now(timezone.utc).isoformat()
             self._save_cache(people, programs, fetched_at)
             return people, programs, fetched_at, False
@@ -406,8 +438,8 @@ class FaFullPool:
             raise
 
     @staticmethod
-    def _apply_enrolled_cutoffs(programs: list[RobotProgram]) -> None:
-        """Проставить порог по зачисленным. Сбой приказа сборку НЕ роняет.
+    def _apply_orders(people: list[RobotPerson], programs: list[RobotProgram]) -> None:
+        """Применить приказ о зачислении. Сбой приказа сборку НЕ роняет.
 
         Приказ — отдельный источник рядом с конкурсными списками: без него пул
         остаётся ровно таким, каким был, и сверка честно откатывается на
@@ -416,15 +448,16 @@ class FaFullPool:
         """
         keys = {program.key for program in programs}
         try:
-            cutoffs = fetch_enrolled_cutoffs(keys)
+            enrolled = fetch_enrolled(keys)
         except Exception as exc:  # noqa: BLE001
             print(
                 f"ВНИМАНИЕ: не удалось прочитать таблицу зачисленных ФА ({exc}) — "
-                "порог по зачисленным не проставлен, сверка пойдёт по отметке "
-                "сайта о проходящих (места и конкурс не затронуты).",
+                "олимпиадники не подтянуты, порог по зачисленным не проставлен, "
+                "сверка пойдёт по отметке сайта о проходящих.",
                 file=sys.stderr,
             )
             return
+        cutoffs = enrolled_cutoffs(enrolled)
         for program in programs:
             program.enrolled_cutoff = cutoffs.get(program.key)
         missing = len(keys) - len(cutoffs)
@@ -432,6 +465,66 @@ class FaFullPool:
             print(
                 f"ВНИМАНИЕ: {missing} из {len(keys)} программ ФА не встретились в "
                 "таблице зачисленных — по ним порога по зачисленным не будет.",
+                file=sys.stderr,
+            )
+        FaFullPool._add_olympiad_enrolled(people, enrolled)
+
+    @staticmethod
+    def _add_olympiad_enrolled(people: list[RobotPerson], enrolled: list[FaEnrolled]) -> None:
+        """Добавить в пул зачисленных олимпиадников — иначе робот раздаёт их места.
+
+        Конкурсный список ФА, по которому собирается пул, это список ОБЩЕГО
+        конкурса (`type_conkurs`): олимпиадников в нём нет вовсе — 0 из 16751
+        человека. А приказ зачислил их на московские очные бюджетные места 583,
+        почти столько же, сколько по ЕГЭ (567). Места робот при этом брал полные,
+        по КЦП, и отдавал ЕГЭ-шникам всё: 1239 мест вместо примерно 650 реальных.
+        Направления, где видно нагляднее всего: «Мировая экономика» — 67 мест,
+        из них 63 ушли олимпиадникам и 4 по ЕГЭ; «Международная экономика» — 52,
+        из них 51 и 1; «Экономика и финансы» — 43, из них 38 и 5.
+
+        Подтянуть их живьём из своего конкурсного списка уже нельзя: зачисленных
+        вуз оттуда убирает, и на 10.08.2026 в списке олимпиадников осталось 8
+        программ и один человек на всех. Поэтому берём их из приказа — он и есть
+        единственный оставшийся источник.
+
+        Каждому ставим БВИ-выбор его направления: место занимает сам каскад в
+        БВИ-фазе, а не вычитание из числа мест. Так честнее и проще проверить —
+        занятыми окажутся ровно те места, на которые вуз издал приказ.
+
+        447 из 583 при этом УЖЕ есть в пуле как обычные абитуриенты общего
+        конкурса: без этой правки они вторым заходом отбирали ещё и места по
+        ЕГЭ, хотя своё уже получили. Пометка БВИ снимает и это: каскад ставит
+        их в БВИ-фазе и в очередь ЕГЭ больше не пускает.
+        """
+        by_code = {person.code: person for person in people}
+        added = attached = 0
+        for item in enrolled:
+            if item.competition != ORDERS_OLYMPIAD:
+                continue
+            person = by_code.get(item.code)
+            if person is None:
+                person = RobotPerson(code=item.code, score=item.score, consent=True, is_bvi=True)
+                by_code[item.code] = person
+                people.append(person)
+                added += 1
+            else:
+                attached += 1
+            person.is_bvi = True
+            # Согласие — факт, а не предположение: человек уже в приказе.
+            person.consent = True
+            person.enrolled_key = item.program_key
+            choice = next(
+                (item_choice for item_choice in person.choices if item_choice.program_key == item.program_key),
+                None,
+            )
+            if choice is None:
+                person.choices.append(ProgramChoice(program_key=item.program_key, priority=1, is_bvi=True))
+            else:
+                choice.is_bvi = True
+        if added or attached:
+            print(
+                f"Олимпиадники ФА из приказа: {added + attached} "
+                f"(новых {added}, уже были в списке общего конкурса {attached}).",
                 file=sys.stderr,
             )
 
@@ -455,6 +548,7 @@ class FaFullPool:
                     score=int(item["score"]),
                     consent=bool(item["consent"]),
                     is_bvi=bool(item.get("is_bvi")),
+                    enrolled_key=item.get("enrolled_key"),
                     choices=[ProgramChoice(**choice) for choice in item.get("choices", [])],
                 )
                 for item in payload.get("people", [])
@@ -477,6 +571,7 @@ class FaFullPool:
                     "score": person.score,
                     "consent": person.consent,
                     "is_bvi": person.is_bvi,
+                    "enrolled_key": person.enrolled_key,
                     "choices": [asdict(choice) for choice in person.choices],
                 }
                 for person in people
