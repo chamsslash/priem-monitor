@@ -249,9 +249,27 @@ def _format_optimistic(result: RobotSimulationResult) -> list[str]:
     return lines
 
 
-def _format_error_response(title: str, error: str) -> str:
+# Почему кода может не быть в пуле, хотя человек в вуз подавался. Общий ответ
+# «вас нет в списках» тут вводит в заблуждение: у МИРЭА это чаще всего значит
+# не «нет», а «уже поздно» — вуз выкидывает бюджетный конкурс из своего API,
+# как только на направлении кончаются места. Замер 10.08.2026: из 97 очных
+# программ бюджетный конкурс остался у 32, у остальных 65 план равен нулю и
+# конкурса в выдаче нет вовсе — их абитуриенты видны только в платных списках.
+_NOT_FOUND_HINTS = {
+    "МИРЭА": (
+        "МИРЭА публикует бюджетный конкурс только там, где ещё остались места: "
+        "сейчас это 32 направления из 97. Если все ваши приоритеты уже закрыты, "
+        "вуз убрал их списки, и данных по вам у него больше нет — ни у нас, ни "
+        "на сайте."
+    ),
+}
+
+
+def _format_error_response(title: str, error: str, university: str | None = None) -> str:
     if "не найден в списках вуза" in error:
-        return f"{title}\n\nВаш код не найден в списках этого вуза."
+        hint = _NOT_FOUND_HINTS.get(university or "")
+        tail = f"\n\n{hint}" if hint else ""
+        return f"{title}\n\nВаш код не найден в списках этого вуза.{tail}"
 
     # POOL_NOT_READY_ERROR — не ошибка, а нормальное состояние прогрева
     # (первые минуты после рестарта бота), поэтому без префикса «Ошибка:».
@@ -264,7 +282,7 @@ def _format_error_response(title: str, error: str) -> str:
 
 def format_robot_result(result: RobotSimulationResult) -> str:
     if result.error:
-        return _format_error_response(f"🤖 Робот — {result.university}", result.error)
+        return _format_error_response(f"🤖 Робот — {result.university}", result.error, result.university)
 
     lines = [
         _data_header(result),
@@ -351,7 +369,7 @@ def format_competitors(result: RobotSimulationResult, priority_number: int) -> s
     просто нет), а позиция в result.user_programs: том же списке и в том же
     порядке, что печатает format_robot_result в блоке «Учитываются приоритеты»."""
     if result.error:
-        return _format_error_response(f"🤖 Конкуренты — {result.university}", result.error)
+        return _format_error_response(f"🤖 Конкуренты — {result.university}", result.error, result.university)
 
     total = len(result.user_programs)
     if priority_number < 1 or priority_number > total:
