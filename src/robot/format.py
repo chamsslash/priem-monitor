@@ -147,7 +147,7 @@ def _format_site_verdict(result: RobotSimulationResult) -> list[str]:
     ]
 
 
-def _format_oracle(item: DimaPrioritySnapshot, score: int) -> str:
+def _format_oracle(item: DimaPrioritySnapshot, score: int, *, published: bool = False) -> str:
     """Колонка «сайт»: что говорит официальный проходной балл по этому направлению.
 
     Показывается ВСЕГДА, а не только при расхождении. Робот — модель, и он может
@@ -158,6 +158,13 @@ def _format_oracle(item: DimaPrioritySnapshot, score: int) -> str:
     if item.site_cutoff is None:
         return ""
     threshold = "любой балл" if item.site_cutoff == 0 else f"проходной {item.site_cutoff}"
+    # Вуз уже опубликовал поимённый результат — он и есть ответ, печатается ниже
+    # («Официальный результат вуза»). Проходной балл тут оставляем справочно, но
+    # БЕЗ вердикта: иначе в одном сообщении спорят два оракула. Живой пример по
+    # МИРЭА: внизу «НЕ зачислены», а в строках приоритетов «✅ расхождение» по
+    # всем четырём — человек видит противоположные ответы и не знает, чему верить.
+    if published:
+        return f" · сайт: {threshold} (справочно)"
     if item.is_tie(score):
         # Ничья, а не расхождение: балл ровно равен проходному, и исход тут не
         # определён — при равенстве проходит не каждый.
@@ -251,6 +258,8 @@ def format_robot_result(result: RobotSimulationResult) -> str:
             f"из них зачислено {result.dima_ahead_in_exam}):"
         )
         lines.append(f"Учитываются приоритеты ({len(result.dima_remaining_at_turn)}):")
+        placement = result.verification.placement if result.verification else None
+        published = placement is not None and placement.source == "published"
         disagreements = 0
         ties = 0
         # Номер здесь — не «сырой» приоритет с сайта (в нём после схлопывания
@@ -263,8 +272,8 @@ def format_robot_result(result: RobotSimulationResult) -> str:
                 ties += 1
             prefix = f"{item.okso_code} " if item.okso_code else ""
             hint = f" (обратиться: /конкуренты {result.university} {number})"
-            oracle = _format_oracle(item, result.dima_score)
-            if item.agrees_with_site(result.dima_score) is False:
+            oracle = _format_oracle(item, result.dima_score, published=published)
+            if not published and item.agrees_with_site(result.dima_score) is False:
                 disagreements += 1
             if item.budget_places is None or item.remaining_at_turn is None:
                 lines.append(f"  {number}. {prefix}{item.title}: места: нет данных{oracle}{hint}")
