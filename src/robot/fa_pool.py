@@ -237,14 +237,6 @@ def fetch_kcp_places() -> dict[str, int]:
     return parse_kcp_pdf(data)
 
 
-# Места для программ вне config/programs.json (с сайта fa.ru, раздел программ).
-FA_PLACES_OVERRIDES: dict[str, int] = {
-    "Прикладная информатика, Бакалавр, Прикладные информационные системы в экономике и финансах, Очная": 25,
-    "Бизнес-информатика, Бакалавр, Цифровая трансформация управления бизнесом, Очная": 20,
-    "Инноватика, Бакалавр, Управление цифровыми инновациями, Очная": 25,
-}
-
-
 _thread_local = threading.local()
 
 
@@ -610,10 +602,13 @@ def _tracked_title_map() -> dict[str, int]:
 
 
 def _places_map() -> dict[str, int]:
-    places = {fa_list_title(program): program.budget_places for program in tracked_programs()}
-    for title, budget_places in FA_PLACES_OVERRIDES.items():
-        places.setdefault(title, budget_places)
-    return places
+    """Резервные места на случай, если приказ о КЦП не скачался — только из
+    config/programs.json. Захардкоженных чисел здесь быть не должно: приказ
+    покрывает все очные московские программы, поэтому любое значение мимо него
+    сработает лишь в аварии и молча разойдётся с официальным (так три прежних
+    оверрайда давали 25/20/25 против 62/15/15 в приказе). Программа без записи
+    в config получает честный seat_source="approx", и сверка это подсветит."""
+    return {fa_list_title(program): program.budget_places for program in tracked_programs()}
 
 
 def tracked_programs() -> list[ProgramConfig]:
