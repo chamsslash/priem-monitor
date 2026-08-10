@@ -359,6 +359,46 @@ def _exact_header_index(cells: list[str], name: str) -> int | None:
 _MAX_HEADER_CELLS = 100
 
 
+def _priority_group(rows: list[list[str]], header_index: int, header: list[str]) -> tuple[int, int]:
+    """Колонка-группа «Баллы по приоритетам» и её ширина в строках данных.
+
+    Заголовок таблицы Политеха ДВУХЭТАЖНЫЙ: баллы по приоритетам стоят в
+    заголовке одной ячейкой-группой, а под ней идёт строка с номерами
+    приоритетов («1», «2», «3»), и в строках данных на её месте столько же
+    отдельных ячеек. Из-за этого строка данных длиннее заголовка ровно на
+    (ширина группы − 1), и ВСЕ колонки правее группы в данных съезжают
+    вправо — а индексы, найденные по тексту заголовка, этого сдвига не знают.
+
+    Замер 10.08.2026: заголовок 21 ячейка, строка данных 23, группа шириной 3.
+    Без учёта сдвига «Конкурсный балл» читался из «Суммы ИД» (баллы 2–10
+    вместо 200–300), «Приоритет» — из «Общежития» (у всех 99), «Согласие» — из
+    «Конкурсного балла» (у всех «нет»), а «Высший проходной приоритет» — из
+    «Приоритета». Робот при этом не падал: он честно считал каскад по мусорным
+    числам и выдавал правдоподобный ответ.
+
+    Возвращает (индекс группы в заголовке, её ширина). Ширина 1 и индекс -1 —
+    подзаголовка нет, сдвига тоже (старая одноэтажная вёрстка).
+    """
+    following = rows[header_index + 1] if header_index + 1 < len(rows) else []
+    numbering = [cell.strip() for cell in following]
+    is_subheader = (
+        1 < len(numbering) < len(header)
+        and numbering == [str(number) for number in range(1, len(numbering) + 1)]
+    )
+    if not is_subheader:
+        return -1, 1
+    group = _exact_header_index(header, "баллы по приоритетам")
+    if group is None:
+        raise ValueError(
+            "Под заголовком таблицы Политеха идёт строка нумерации "
+            f"{numbering}, но колонки-группы «Баллы по приоритетам» в "
+            "заголовке нет — вёрстка поменялась. Считать колонки без неё "
+            "нельзя: индексы правее группы съедут, и робот посчитает каскад "
+            "по чужим числам, ничего не заметив."
+        )
+    return group, len(numbering)
+
+
 def _people_columns(rows: list[list[str]]) -> dict[str, int | None] | None:
     """Позиции нужных колонок в таблице абитуриентов по тексту заголовка.
 
@@ -367,6 +407,8 @@ def _people_columns(rows: list[list[str]]) -> dict[str, int | None] | None:
     (архитектура/дизайн/графика) может быть больше, и тогда все индексы
     после них съезжают. Единственный устойчивый способ — искать колонки по
     названию в строке заголовка этой же таблицы, как в stankin_pool/mpei_pool.
+    Сами эти колонки живут под одной ячейкой-группой, поэтому найденные по
+    заголовку индексы приводятся к индексам строки данных — см. `_priority_group`.
 
     «Высший проходной приоритет» (top) — ОРАКУЛ сайта, а не обязательный
     столбец для сборки списка. Как у stankin_pool._rows_from_table: если его
@@ -378,7 +420,7 @@ def _people_columns(rows: list[list[str]]) -> dict[str, int | None] | None:
     вместо уже успешно разобранного budget_places из шапки), хотя бриф прямо
     требовал копировать поведение stankin, где отсутствие top допустимо.
     """
-    for cells in rows:
+    for index, cells in enumerate(rows):
         if len(cells) > _MAX_HEADER_CELLS:
             continue
         code_idx = _exact_header_index(cells, "уникальный код")
@@ -389,12 +431,19 @@ def _people_columns(rows: list[list[str]]) -> dict[str, int | None] | None:
         priority_idx = _exact_header_index(cells, "приоритет")
         if consent_idx is None or priority_idx is None:
             continue
+        group, width = _priority_group(rows, index, cells)
+
+        def shifted(column: int | None, *, group: int = group, width: int = width) -> int | None:
+            if column is None or column <= group:
+                return column
+            return column + width - 1
+
         return {
-            "code": code_idx,
-            "score": score_idx,
-            "consent": consent_idx,
-            "priority": priority_idx,
-            "top": _exact_header_index(cells, "высший проходной приоритет"),
+            "code": shifted(code_idx),
+            "score": shifted(score_idx),
+            "consent": shifted(consent_idx),
+            "priority": shifted(priority_idx),
+            "top": shifted(_exact_header_index(cells, "высший проходной приоритет")),
         }
     return None
 
@@ -443,7 +492,35 @@ def _parse_people(rows: list[list[str]]) -> list[dict]:
                 "top_passing": top_passing,
             }
         )
+    _assert_columns_sane(result)
     return result
+
+
+# Доля строк с нечисловым приоритетом, выше которой разбор считается
+# промахнувшимся мимо колонок. Ноль ставить нельзя: приоритет у отдельных
+# строк бывает пуст (тогда 99 — законная заглушка), а вот у большинства он
+# всегда проставлен.
+_MAX_BROKEN_PRIORITY_FRACTION = 0.5
+
+
+def _assert_columns_sane(rows: list[dict]) -> None:
+    """Упасть, если колонки разъехались, а разбор этого «не заметил».
+
+    Съехавшие на две позиции колонки (см. `_priority_group`) не ломают разбор:
+    каждая ячейка на месте съезда тоже что-то содержит, просто не то. Робот
+    получает мусорные баллы и приоритеты и молча считает по ним каскад — ровно
+    тот класс тихой потери, который здесь дороже всего. Дешёвая проверка на
+    выходе: приоритет обязан быть числом почти у всех строк.
+    """
+    if not rows:
+        return
+    broken = sum(1 for row in rows if row["priority"] == 99)
+    if broken > len(rows) * _MAX_BROKEN_PRIORITY_FRACTION:
+        raise ValueError(
+            f"У {broken} из {len(rows)} строк Политеха приоритет не разобрался — "
+            "колонки таблицы не там, где их нашёл заголовок. Разбор остановлен: "
+            "молча считать каскад по чужим колонкам нельзя."
+        )
 
 
 def _passing_cutoff(rows: list[dict]) -> int | None:

@@ -159,6 +159,39 @@ def _published_placement(person: RobotPerson | None) -> tuple[bool, str | None]:
     return False, None
 
 
+def published_cutoffs(people: list[RobotPerson]) -> dict[str, int]:
+    """Проходной балл по каждому направлению, выведенный из СПИСКА ЗАЧИСЛЕННЫХ.
+
+    Это минимальный балл среди тех, кого вуз уже зачислил сюда. Отвечает не на
+    вопрос «есть ли вы в списках» (согласие вы не подавали — и не окажетесь там
+    никогда), а на тот, который человека и волнует: «попал бы я, если бы подал
+    согласие». Балл выше или равный минимальному среди зачисленных и означает
+    «прошёл бы».
+
+    Порог из списка зачисленных лучше опубликованного вузом проходного балла
+    тем, что это факт, а не оценка: он посчитан по людям, которых вуз реально
+    зачислил. Хуже — тем, что он посчитан по ВИДИМОЙ части зачисленных. У
+    Политеха вуз убирает зачисленного из списка того направления, куда он
+    поступил, и человек виден только через списки своих остальных приоритетов;
+    у кого приоритет был один, тот исчезает целиком. Невидимые обычно как раз
+    внизу списка, поэтому порог получается не заниженным, а завышенным — то
+    есть ошибается в безопасную сторону («не хватило» вместо «прошёл бы»).
+
+    БВИ-шники в расчёт не идут: их зачисляют вне конкурса баллов, и их балл
+    порогом не является — один олимпиадник со скромным ЕГЭ обвалил бы планку
+    для всех.
+    """
+    scores: dict[str, list[int]] = {}
+    for person in people:
+        if person.is_bvi:
+            continue
+        published, key = _published_placement(person)
+        if not published or key is None:
+            continue
+        scores.setdefault(key, []).append(person.score)
+    return {key: min(values) for key, values in scores.items() if values}
+
+
 def _results_published(people: list[RobotPerson]) -> bool:
     """Перешёл ли вуз к публикации поимённых результатов зачисления.
 
@@ -171,12 +204,10 @@ def _results_published(people: list[RobotPerson]) -> bool:
     )
 
 
-def _site_placement(
-    programs: list[RobotProgram], sim_dima: RobotPerson | None, dima_score: int
+def _walk_priorities(
+    cutoff_by_key: dict[str, int | None], sim_dima: RobotPerson | None, dima_score: int
 ) -> str | None:
-    """Куда сайт-порог селит Диму: первое по приоритету направление, где его балл
-    перебивает реальный проходной среди согласных."""
-    cutoff_by_key = {program.key: _oracle_cutoff(program) for program in programs}
+    """Первое по приоритету направление, где балл Димы перебивает порог."""
     for key in _priority_keys(sim_dima):
         cutoff = cutoff_by_key.get(key)
         if cutoff is None:
@@ -184,6 +215,15 @@ def _site_placement(
         if dima_score >= cutoff:
             return key
     return None
+
+
+def _site_placement(
+    programs: list[RobotProgram], sim_dima: RobotPerson | None, dima_score: int
+) -> str | None:
+    """Куда сайт-порог селит Диму: первое по приоритету направление, где его балл
+    перебивает реальный проходной среди согласных."""
+    cutoff_by_key = {program.key: _oracle_cutoff(program) for program in programs}
+    return _walk_priorities(cutoff_by_key, sim_dima, dima_score)
 
 
 def _build_placement_check(
@@ -198,18 +238,30 @@ def _build_placement_check(
     robot_key = result.dima_placed_program_key
     robot_title = result.dima_placed_title or _title_for_key(programs, robot_key)
 
-    # Вуз опубликовал поимённые результаты — сверяем с ними, а не с проходным
-    # баллом: список зачисленных это факт, порог лишь оценка. Отсутствие
-    # человека среди зачисленных — тоже ответ («не зачислен»), поэтому ветка
-    # работает и когда _published_placement вернул None.
+    # Вуз опубликовал поимённые результаты — порог считаем по ним, а не по
+    # колонке «Высший проходной приоритет»: список зачисленных это факт, а
+    # колонку вуз после приказов обычно снимает.
+    #
+    # Сверять «есть ли Дима в списке зачисленных» бессмысленно: согласие он не
+    # подавал, значит его там нет и быть не может, и любой прогноз «проходит»
+    # автоматически считался бы ошибкой. Вопрос ставится так же, как везде в
+    # роботе: как будто согласие подано. Отсюда порог — минимальный балл среди
+    # зачисленных (см. published_cutoffs), а дальше обычный обход приоритетов.
     if _results_published(people):
-        _, site_key = _published_placement(sim_dima)
+        published: dict[str, int | None] = dict(published_cutoffs(people))
+        site_key = _walk_priorities(published, sim_dima, result.dima_score)
+        cutoff = published.get(site_key) if site_key is not None else None
+        if robot_key == site_key:
+            status = "match"
+        else:
+            status = "boundary" if cutoff == result.dima_score else "mismatch"
         return PlacementCheck(
-            status="match" if robot_key == site_key else "mismatch",
+            status=status,
             robot_key=robot_key,
             robot_title=robot_title,
             site_key=site_key,
             site_title=_title_for_key(programs, site_key),
+            site_cutoff=cutoff,
             source="published",
         )
 
@@ -259,6 +311,7 @@ def _build_placement_check(
         robot_title=robot_title,
         site_key=site_key,
         site_title=_title_for_key(programs, site_key),
+        site_cutoff=cutoff_by_key.get(site_key) if site_key is not None else None,
     )
 
 
@@ -271,11 +324,13 @@ def _log_report(report: VerificationReport) -> None:
         logger.warning("[сверка %s] места из резерва: %s", report.university, details)
     placement = report.placement
     if placement is not None and placement.status in ("mismatch", "boundary"):
+        oracle = "порог по зачисленным" if placement.source == "published" else "сайт-порог"
         logger.warning(
-            "[сверка %s] прогноз (%s): робот → %s, сайт-порог → %s",
+            "[сверка %s] прогноз (%s): робот → %s, %s → %s",
             report.university,
             placement.status,
             placement.robot_title or "не проходит",
+            oracle,
             placement.site_title or "не проходит",
         )
     if not fallback and (placement is None or placement.status not in ("mismatch", "boundary")):

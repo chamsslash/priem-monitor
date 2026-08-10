@@ -19,7 +19,12 @@ from .models import (
     RobotSimulationResult,
 )
 from .universities import SUPPORTED_UNIVERSITIES, fetch_university_pool, read_cached_pool
-from .verification import _oracle_cutoff, _site_placement, build_verification_report
+from .verification import (
+    _oracle_cutoff,
+    _site_placement,
+    build_verification_report,
+    published_cutoffs,
+)
 
 
 def _find_dima_in_pool(people: list[RobotPerson], list_code: str) -> RobotPerson | None:
@@ -498,6 +503,13 @@ def run_robot_simulation(
                 consent=dima.consent if person.code == dima.code else person.consent,
                 is_bvi=dima.is_bvi if person.code == dima.code else person.is_bvi,
                 choices=dima.choices if person.code == dima.code else person.choices,
+                # Копия человека собиралась без enrolled_key, и опубликованный
+                # вузом результат зачисления терялся на ровном месте: у Политеха
+                # он живёт ТОЛЬКО на человеке (вуз убирает зачисленного из списка
+                # того направления, куда он поступил, и помеченного выбора у него
+                # нет). Молча, без единой ошибки — сверка просто не находила
+                # зачисленных и считала, что вуз ничего не публиковал.
+                enrolled_key=person.enrolled_key,
             )
             for person in people
         ]
@@ -538,7 +550,14 @@ def run_robot_simulation(
     # _oracle_cutoff, а не сырой passing_cutoff: там, где вуз не отметил ни одного
     # проходящего, порог равен 0, и строка приоритета печатала бы «сайт: любой
     # балл ✅» — обещание пройти куда угодно вместо честного «вердикта пока нет».
-    site_cutoffs = {program.key: _oracle_cutoff(program) for program in programs}
+    site_cutoffs: dict[str, int | None] = {
+        program.key: _oracle_cutoff(program) for program in programs
+    }
+    # Где вуз уже опубликовал зачисленных, порог считается по ним, а не по
+    # колонке «Высший проходной приоритет»: она к этому моменту обычно снята
+    # (все нули), и строки приоритетов печатали бы «любой балл ✅». Тот же
+    # порог стоит в вердикте ниже — числа в одном сообщении должны совпадать.
+    site_cutoffs.update(published_cutoffs(people))
     for snapshot in result.dima_remaining_at_turn:
         snapshot.site_cutoff = site_cutoffs.get(snapshot.program_key)
 
