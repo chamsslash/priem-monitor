@@ -100,7 +100,10 @@ def _format_verification(report: VerificationReport | None) -> list[str]:
     # только то, чего там нет: случай, когда сверять вообще нечем.
     placement = report.placement
     if placement is not None and placement.status == "unavailable":
-        lines.append("ℹ️ Прогноз: нет проходных баллов на сайте — не сверить")
+        lines.append(
+            "ℹ️ Конкурсные списки для сверки: оракул сайта недоступен — "
+            "вуз ещё не отметил проходящих, сверить прогноз не с чем"
+        )
     return lines
 
 

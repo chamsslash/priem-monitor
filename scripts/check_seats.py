@@ -235,7 +235,10 @@ def _print_placement(university: str) -> bool:
         print("  прогноз: у вуза нет независимого оракула сайта — сверка не проводится")
         return True
     if check.status == "unavailable":
-        print("  прогноз: сайт не отдал проходные баллы — сверять не с чем")
+        print(
+            "  прогноз: конкурсные списки есть, оракул сайта недоступен "
+            "(вуз не отметил ни одного проходящего) — сверять не с чем"
+        )
         return True
     robot = check.robot_title or "никуда не проходит"
     site = check.site_title or "никуда не проходит"

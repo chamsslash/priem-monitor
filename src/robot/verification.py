@@ -104,12 +104,36 @@ def _build_seat_checks(
     return checks
 
 
+def _oracle_cutoff(program: RobotProgram) -> int | None:
+    """Проходной балл направления, если оракулом сайта вообще можно пользоваться.
+
+    Наличия проходного балла НЕДОСТАТОЧНО. У СТАНКИНа и Политеха колонка
+    «Высший проходной приоритет» на странице есть и разбирается (у всех строк
+    значение «нет», а не отсутствие колонки), но вуз пока не отметил в ней
+    НИКОГО. `_passing_cutoff` в этом случае отдаёт 0, и условие «балл >= 0»
+    истинно всегда — оракул вырождается в константу «первый приоритет» и
+    выдаёт выдуманный вердикт: у Политеха ложное «совпало», у СТАНКИНа ложное
+    «расхождение».
+
+    `site_passing_count` считается всеми пулами ровно для этого случая (см. его
+    докстроку рядом с `_passing_cutoff`), но до сих пор ни разу не читался.
+    Ноль означает «вуз вердикт не опубликовал» — сверять не с чем.
+
+    None — не то же самое, что 0, и его тут быть не должно: у МИРЭА порог берётся
+    из `minScore` competitions_api, отмеченных людей в этом источнике нет по
+    устройству, а сам порог настоящий. Поэтому проверка именно на `== 0`.
+    """
+    if program.passing_cutoff is None or program.site_passing_count == 0:
+        return None
+    return program.passing_cutoff
+
+
 def _site_placement(
     programs: list[RobotProgram], sim_dima: RobotPerson | None, dima_score: int
 ) -> str | None:
     """Куда сайт-порог селит Диму: первое по приоритету направление, где его балл
     перебивает реальный проходной среди согласных."""
-    cutoff_by_key = {program.key: program.passing_cutoff for program in programs}
+    cutoff_by_key = {program.key: _oracle_cutoff(program) for program in programs}
     for key in _priority_keys(sim_dima):
         cutoff = cutoff_by_key.get(key)
         if cutoff is None:
@@ -129,9 +153,10 @@ def _build_placement_check(
         return None
     robot_key = result.dima_placed_program_key
     robot_title = result.dima_placed_title or _title_for_key(programs, robot_key)
-    cutoff_by_key = {program.key: program.passing_cutoff for program in programs}
+    cutoff_by_key = {program.key: _oracle_cutoff(program) for program in programs}
 
-    # Нет ни одного проходного балла (колонки не было) — сверять не с чем.
+    # Нет ни одного пригодного проходного балла — колонки не было либо вуз ещё
+    # не отметил ни одного проходящего (см. _oracle_cutoff). Сверять не с чем.
     if all(cutoff is None for cutoff in cutoff_by_key.values()):
         return PlacementCheck(
             status="unavailable",
