@@ -324,10 +324,75 @@ def kcp_group_title(catalog_title: str) -> str:
     return " ".join(_OKSO_SUFFIX_RE.sub("", catalog_title).replace("\xa0", " ").split())
 
 
-def _bacc_url_for_list_id(list_id: str) -> str | None:
+WAVE_PAGE_URL = "https://pk.mpei.ru/inform/list"
+# Ссылка на конкурсный список бюджетного общего конкурса + дата зачисления из её
+# подписи. Волн у группы бывает несколько: обычная («…bacc.html», «зачислениe 7
+# августа») и дополнительное зачисление («…bacc_ae.html», «дополнительное
+# зачислениe 11 августа»).
+_WAVE_LINK_RE = re.compile(r"/inform/list(\d+)bacc(?:_ae)?\.html")
+# Хвост слова «зачисление» намеренно не фиксируем: в подписях МЭИ последняя буква
+# — ЛАТИНСКАЯ «e» (U+0065), а не кириллическая «е» (U+0435). Омоглиф незаметен
+# глазом, и точный шаблон «зачислени[ей]» не находил ни одной ссылки.
+_WAVE_DATE_RE = re.compile(r"зачислени\S*\s+(\d{1,2})\s+([а-яё]+)\s+(\d{4})", re.IGNORECASE)
+_WAVE_MONTHS = {
+    "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
+    "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
+}
+
+
+def _wave_date(text: str) -> tuple[int, int, int] | None:
+    match = _WAVE_DATE_RE.search(text)
+    if not match:
+        return None
+    month = _WAVE_MONTHS.get(match.group(2).lower())
+    if month is None:
+        return None
+    return int(match.group(3)), month, int(match.group(1))
+
+
+def fetch_latest_bacc_urls() -> dict[str, str]:
+    """Номер конкурсной группы → ссылка на список ПОСЛЕДНЕЙ волны бюджета.
+
+    У группы бывает несколько волн зачисления, и у каждой своя страница со своим
+    «Количеством вакантных мест». Брать всегда «…bacc.html» нельзя: после того
+    как волна отработала, её вакансии — уже история. Живой пример на 10.08.2026:
+    у «Теплоэнергетики» на волне 7 августа значилось 138 вакантных мест, а на
+    дополнительном зачислении 11 августа осталось ОДНО. Робот, читая старую
+    волну, раздавал 138 несуществующих мест.
+
+    Волна выбирается по дате зачисления из подписи ссылки, а не по наличию
+    суффикса `_ae`: суффикс — деталь вёрстки, дата — смысл. Если разобрать
+    страницу не удалось, возвращается пустой словарь, и вызывающий откатывается
+    на прежний шаблон «…bacc.html» — потерять свежую волну не так плохо, как
+    уронить всю сборку.
+    """
+    try:
+        html = _get(WAVE_PAGE_URL)
+    except Exception:  # noqa: BLE001
+        return {}
+    soup = BeautifulSoup(html, "lxml")
+    best: dict[str, tuple[tuple[int, int, int], str]] = {}
+    for link in soup.find_all("a", href=True):
+        match = _WAVE_LINK_RE.search(link["href"])
+        if not match:
+            continue
+        date = _wave_date(link.get_text(" ", strip=True))
+        if date is None:
+            continue
+        number = match.group(1)
+        if number not in best or date > best[number][0]:
+            best[number] = (date, urljoin(WAVE_PAGE_URL, match.group(0)))
+    return {number: url for number, (_, url) in best.items()}
+
+
+def _bacc_url_for_list_id(list_id: str, latest: dict[str, str] | None = None) -> str | None:
     match = _LIST_ID_NUMBER_RE.fullmatch(list_id)
     if not match:
         return None
+    if latest:
+        url = latest.get(match.group(1))
+        if url:
+            return url
     return BACC_URL_TEMPLATE.format(n=match.group(1))
 
 
@@ -425,8 +490,10 @@ def _rows_and_meta_from_bacc(html: str) -> tuple[list[dict], int | None, int | N
     return result, vacant, cutoff, passing_count
 
 
-def fetch_list_rows_and_meta(list_id: str) -> tuple[list[dict], int | None, int | None, int | None]:
-    url = _bacc_url_for_list_id(list_id) or urljoin(CATALOG_URL, list_id)
+def fetch_list_rows_and_meta(
+    list_id: str, latest: dict[str, str] | None = None
+) -> tuple[list[dict], int | None, int | None, int | None]:
+    url = _bacc_url_for_list_id(list_id, latest) or urljoin(CATALOG_URL, list_id)
     html = _get(url)
     return _rows_and_meta_from_bacc(html)
 
@@ -668,9 +735,13 @@ class MpeiFullPool:
         vacant_by_list: dict[str, int] = {}
         passing_by_list: dict[str, int] = {}
         failed_lists: list[str] = []
+        # Одним запросом узнаём, у каких групп есть более поздняя волна зачисления,
+        # чтобы читать её вакансии, а не отработавшие (см. fetch_latest_bacc_urls).
+        latest = fetch_latest_bacc_urls()
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {
-                executor.submit(fetch_list_rows_and_meta, list_id): (title, list_id) for title, list_id in catalog
+                executor.submit(fetch_list_rows_and_meta, list_id, latest): (title, list_id)
+                for title, list_id in catalog
             }
             for future in as_completed(futures):
                 title, list_id = futures[future]
