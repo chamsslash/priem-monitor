@@ -327,6 +327,23 @@ class MireaFullPool:
         return "Исключен" in str(entrant.get("s") or "")
 
     @staticmethod
+    def _enrolled_here(entrant: dict) -> bool:
+        """Опубликованный результат: человек ЗАЧИСЛЕН на этот конкурс.
+
+        Статусы в поле `s` бюджетных конкурсов (замер 10.08.2026):
+        «Участвует в конкурсе» 62138, «Зачислен» 924, «Исключен (зачислен на
+        другой конкурс)» 97, «Отказ от зачисления» 47, «Сданы ВИ» 4.
+
+        Сравнивать прогноз с проходным баллом там, где вуз уже назвал зачисленных
+        поимённо, — заведомо хуже: у МИРЭА все 32 бюджетных конкурса помечены
+        `isFinal: True`, кампания завершена. Живой пример: у абитуриента 1824102
+        (259 баллов) во всех четырёх его конкурсах стоит «Участвует в конкурсе»,
+        то есть он не зачислен, а оракул по проходному баллу уверял, что он
+        прошёл на «ИТ в атомной отрасли» (порог 258). Прав был робот.
+        """
+        return str(entrant.get("s") or "").strip() == "Зачислен"
+
+    @staticmethod
     def _merge_people(competitions: list[dict]) -> list[RobotPerson]:
         people: dict[str, RobotPerson] = {}
         for competition in competitions:
@@ -348,6 +365,7 @@ class MireaFullPool:
                     priority=priority or 99,
                     is_bvi=is_bvi,
                     enrolls_elsewhere=MireaFullPool._enrolls_elsewhere(entrant),
+                    enrolled=MireaFullPool._enrolled_here(entrant),
                 )
                 person = people.get(code)
                 if person is None:

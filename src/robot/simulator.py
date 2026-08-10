@@ -542,7 +542,9 @@ def run_robot_simulation(
     for snapshot in result.dima_remaining_at_turn:
         snapshot.site_cutoff = site_cutoffs.get(snapshot.program_key)
 
-    result.verification = build_verification_report(university, result, programs, sim_dima=dima)
+    result.verification = build_verification_report(
+        university, result, programs, sim_dima=dima, people=people
+    )
     result.optimistic = _build_optimistic(
         university,
         programs,

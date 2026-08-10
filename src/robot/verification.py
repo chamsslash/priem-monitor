@@ -130,6 +130,40 @@ def _oracle_cutoff(program: RobotProgram) -> int | None:
     return program.passing_cutoff
 
 
+def _published_placement(person: RobotPerson | None) -> tuple[bool, str | None]:
+    """Опубликованный вузом результат зачисления этого человека.
+
+    Возвращает (результат опубликован, куда зачислен). Когда вуз назвал
+    зачисленных поимённо (`ProgramChoice.enrolled`), сравнивать прогноз с
+    проходным баллом незачем и вредно: порог — это оценка, а список зачисленных
+    — факт. У МИРЭА факт и порог прямо разошлись (см. `_enrolled_here`), и прав
+    оказался прогноз робота, а не порог.
+
+    «Опубликован» определяется по наличию хотя бы одной отметки во ВСЕЙ выборке
+    человека, а не по конкретному направлению: отсутствие отметки у человека
+    означает «не зачислен», и это полноценный ответ, а не пробел в данных.
+    Признак того, что вуз вообще перешёл к публикации результатов, приходит
+    снаружи — см. вызов в `_build_placement_check`.
+    """
+    if person is None:
+        return False, None
+    for key in person.ordered_program_keys():
+        choice = next((item for item in person.choices if item.program_key == key), None)
+        if choice is not None and choice.enrolled:
+            return True, key
+    return False, None
+
+
+def _results_published(people: list[RobotPerson]) -> bool:
+    """Перешёл ли вуз к публикации поимённых результатов зачисления.
+
+    Одной отметки по вузу достаточно: список зачисленных либо публикуется, либо
+    нет. Проверяем по всей выборке, а не по одному человеку, иначе «этот не
+    зачислен» было бы неотличимо от «вуз ещё ничего не публиковал».
+    """
+    return any(choice.enrolled for person in people for choice in person.choices)
+
+
 def _site_placement(
     programs: list[RobotProgram], sim_dima: RobotPerson | None, dima_score: int
 ) -> str | None:
@@ -150,11 +184,28 @@ def _build_placement_check(
     result: RobotSimulationResult,
     programs: list[RobotProgram],
     sim_dima: RobotPerson | None,
+    people: list[RobotPerson],
 ) -> PlacementCheck | None:
     if university not in PLACEMENT_VERIFIED_UNIVERSITIES:
         return None
     robot_key = result.dima_placed_program_key
     robot_title = result.dima_placed_title or _title_for_key(programs, robot_key)
+
+    # Вуз опубликовал поимённые результаты — сверяем с ними, а не с проходным
+    # баллом: список зачисленных это факт, порог лишь оценка. Отсутствие
+    # человека среди зачисленных — тоже ответ («не зачислен»), поэтому ветка
+    # работает и когда _published_placement вернул None.
+    if _results_published(people):
+        _, site_key = _published_placement(sim_dima)
+        return PlacementCheck(
+            status="match" if robot_key == site_key else "mismatch",
+            robot_key=robot_key,
+            robot_title=robot_title,
+            site_key=site_key,
+            site_title=_title_for_key(programs, site_key),
+            source="published",
+        )
+
     cutoff_by_key = {program.key: _oracle_cutoff(program) for program in programs}
 
     # Нет ни одного пригодного проходного балла — колонки не было либо вуз ещё
@@ -235,11 +286,12 @@ def build_verification_report(
     programs: list[RobotProgram],
     *,
     sim_dima: RobotPerson | None,
+    people: list[RobotPerson] | None = None,
 ) -> VerificationReport:
     report = VerificationReport(
         university=university,
         seats=_build_seat_checks(result, programs),
-        placement=_build_placement_check(university, result, programs, sim_dima),
+        placement=_build_placement_check(university, result, programs, sim_dima, people or []),
     )
     _log_report(report)
     return report

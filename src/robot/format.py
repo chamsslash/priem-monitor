@@ -118,6 +118,19 @@ def _format_site_verdict(result: RobotSimulationResult) -> list[str]:
     placement = report.placement if report else None
     if placement is None or placement.status == "unavailable":
         return []
+
+    # Вуз опубликовал поимённые результаты — это факт, а не порог, и называть его
+    # «оракулом» нельзя: человеку важно понимать, что спорить уже не о чем.
+    if placement.source == "published":
+        site = placement.site_title
+        official = f"зачислены на «{site}»" if site else "НЕ зачислены"
+        if placement.status == "match":
+            return [f"  Официальный результат вуза: {official} — прогноз совпал ✅"]
+        return [
+            f"  ⚠️ Официальный результат вуза: вы {official}",
+            "  Это уже опубликованное решение вуза, а не прогноз — верно оно, а не робот",
+        ]
+
     site = placement.site_title or "никуда не проходит"
     if placement.status == "match":
         return ["  Оракул сайта: то же самое ✅"]
