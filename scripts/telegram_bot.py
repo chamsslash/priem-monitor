@@ -313,6 +313,7 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
             code = get_user_code(chat_id)
             worker = get_refresh_worker()
             results = []
+            requested: list[str] = []
             stale_any = False
             for university in sorted(robot_ready_universities()):
                 settings = build_robot_settings(code, university)
@@ -326,8 +327,39 @@ def _handle_message(config, chat_id: int, text: str, message_id: int) -> None:
                 # догрев на ровном месте (M1 из ре-ревью).
                 if not result.config_error and is_pool_stale(SUPPORTED_UNIVERSITIES[university], result.fetched_at):
                     stale_any = True
-                    worker.request(university)
+                    requested.append(university)
             send_message(config.bot_token, chat_id, _format_multi_status(code, results, stale=stale_any), reply_to=message_id)
+
+            # Догрев идёт в воркере, а ответ выше ушёл на старом кэше. Без
+            # колбэка человеку пришлось бы вручную звать /статус повторно и
+            # угадывать, когда сборка закончилась (у ФА это ~5 минут).
+            if requested:
+                pending = set(requested)
+                lock = threading.Lock()
+
+                def _status_ready(university: str, error: Exception | None) -> None:
+                    # Колбэк зовётся из воркер-потоков, по одному на вуз. Досылаем
+                    # ОДНО сообщение, когда отработали все заказанные, иначе на
+                    # пять вузов прилетело бы пять сводок подряд.
+                    with lock:
+                        pending.discard(university)
+                        if pending:
+                            return
+                    try:
+                        fresh = [
+                            (uni, run_robot_simulation(uni, settings=build_robot_settings(code, uni), stale_ok=True))
+                            for uni in sorted(robot_ready_universities())
+                        ]
+                        send_message(
+                            config.bot_token,
+                            chat_id,
+                            "🔄 Данные обновились:\n\n" + _format_multi_status(code, fresh, stale=False),
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("Не отправить обновлённый /статус: %s", exc)
+
+                for university in requested:
+                    worker.request(university, on_done=_status_ready)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Статус не построился: %s", exc)
             send_message(config.bot_token, chat_id, f"Ошибка:\n{exc}", reply_to=message_id)
