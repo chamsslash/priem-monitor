@@ -102,7 +102,7 @@ def _format_verification(report: VerificationReport | None) -> list[str]:
     if placement is not None and placement.status == "unavailable":
         lines.append(
             "ℹ️ Конкурсные списки для сверки: оракул сайта недоступен — "
-            "вуз ещё не отметил проходящих, сверить прогноз не с чем"
+            "вуз не отмечает проходящих, сверить прогноз не с чем"
         )
     return lines
 

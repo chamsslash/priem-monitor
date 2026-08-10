@@ -237,7 +237,7 @@ def _print_placement(university: str) -> bool:
     if check.status == "unavailable":
         print(
             "  прогноз: конкурсные списки есть, оракул сайта недоступен "
-            "(вуз не отметил ни одного проходящего) — сверять не с чем"
+            "(на странице нет отметок о проходящих) — сверять не с чем"
         )
         return True
     robot = check.robot_title or "никуда не проходит"
