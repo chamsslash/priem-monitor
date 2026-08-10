@@ -786,9 +786,17 @@ class PolytechFullPool:
                 unresolved += 1
             else:
                 marked += 1
-            choice = next((item for item in person.choices if item.program_key == key), None)
-            if choice is not None:
-                choice.enrolled = True
+            # Человек уже зачислен — за оставшиеся места он не борется. У МЭИ и
+            # МИРЭА это видно из самой строки списка («Зачисляется в другой КГ»,
+            # «Исключен (зачислен на другой конкурс)»), а Политех такой пометки
+            # не даёт: у всех стоит «Участвует в конкурсе». Раньше эти люди шли
+            # в каскад как обычные конкуренты и занимали чужие места — на одной
+            # «Прикладной информатике» их 580 из 3601. Теперь их выдаёт приказ.
+            for item in person.choices:
+                if item.program_key == key:
+                    item.enrolled = True
+                else:
+                    item.enrolls_elsewhere = True
         if unresolved:
             print(
                 f"ВНИМАНИЕ: у {unresolved} зачисленных Политеха строка приказа не "
